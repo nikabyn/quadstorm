@@ -1,0 +1,31 @@
+EESchema-LIBRARY Version 2.3
+#encoding utf-8
+#SamacSys ECAD Model MP2338GTL-Z
+#/15882639/1816350/2.50/8/3/Integrated Circuit
+DEF MP2338GTL-Z IC 0 30 Y Y 1 F N
+F0 "IC" 850 300 50 H V L CNN
+F1 "MP2338GTL-Z" 850 200 50 H V L CNN
+F2 "MP2338GTLZ" 850 100 50 H I L CNN
+F3 "https://www.monolithicpower.com/en/documentview/productdocument/index/version/2/document_type/Datasheet/lang/en/sku/MP2338GTL/document_id/9461/" 850 0 50 H I L CNN
+F4 "Switching Voltage Regulators High-Efficiency,28V,3A,430kHz Synchronous Buck with PG and ext.SS In SOT583 Package" 850 -100 50 H I L CNN "Description"
+F5 "0.6" 850 -200 50 H I L CNN "Height"
+F6 "Monolithic Power Systems (MPS)" 850 -300 50 H I L CNN "Manufacturer_Name"
+F7 "MP2338GTL-Z" 850 -400 50 H I L CNN "Manufacturer_Part_Number"
+F8 "946-MP2338GTL-Z" 850 -500 50 H I L CNN "Mouser Part Number"
+F9 "https://www.mouser.co.uk/ProductDetail/Monolithic-Power-Systems-MPS/MP2338GTL-Z?qs=Li%252BoUPsLEnuizxbD7Jo%252B7w%3D%3D" 850 -600 50 H I L CNN "Mouser Price/Stock"
+F10 "" 850 -700 50 H I L CNN "Arrow Part Number"
+F11 "" 850 -800 50 H I L CNN "Arrow Price/Stock"
+DRAW
+X PG 1 0 0 200 R 50 50 0 0 P
+X VIN 2 0 -100 200 R 50 50 0 0 P
+X SW 3 0 -200 200 R 50 50 0 0 P
+X GND 4 0 -300 200 R 50 50 0 0 P
+X BST 5 1000 -300 200 L 50 50 0 0 P
+X EN 6 1000 -200 200 L 50 50 0 0 P
+X SS 7 1000 -100 200 L 50 50 0 0 P
+X FB 8 1000 0 200 L 50 50 0 0 P
+P 5 0 1 6 200 100 800 100 800 -400 200 -400 200 100 N
+ENDDRAW
+ENDDEF
+#
+#End Library
