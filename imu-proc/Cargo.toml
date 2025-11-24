@@ -1,0 +1,11 @@
+[package]
+name = "imu-proc"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+base64 = "0.22.1"
+eframe = { version = "0.33.2", default-features = false, features = ["glow", "accesskit", "default_fonts", "wayland"] }
+egui = { version = "0.33.2", default-features = false }
+egui_plot = "0.34.0"
+eyre = "0.6.12"
