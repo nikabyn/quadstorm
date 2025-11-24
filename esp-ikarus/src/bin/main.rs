@@ -8,6 +8,7 @@
 
 use core::mem::MaybeUninit;
 
+use base64::Engine;
 use embassy_executor::Spawner;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::lazy_lock::LazyLock;
@@ -16,7 +17,7 @@ use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
 use esp_hal::timer::timg::TimerGroup;
 use esp_ikarus::lsm6ds3;
-use log::info;
+use log::{info, warn};
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
@@ -78,12 +79,38 @@ async fn main(spawner: Spawner) -> ! {
 async fn imu_consumer(
     mut rx: embassy_sync::zerocopy_channel::Receiver<'static, NoopRawMutex, lsm6ds3::SampleEvent>,
 ) {
+    let mut sample_count = 0u64;
+
     loop {
         let sample = *rx.receive().await;
         rx.receive_done();
+
+        let (tag, lsm6ds3::Sample { gy, xl, temp }) = match sample {
+            lsm6ds3::SampleEvent::Ok(sample) => (b"O", sample),
+            lsm6ds3::SampleEvent::Lagged(sample) => (b"L", sample),
+        };
+
+        let mut sample_bytes = [0; { 1 + 8 + (3 * 3 * 4) }];
+        tag.iter()
+            .copied()
+            .chain(sample_count.to_le_bytes().into_iter())
+            .chain(gy.into_iter().flat_map(f32::to_le_bytes))
+            .chain(xl.into_iter().flat_map(f32::to_le_bytes))
+            .chain(temp.into_iter().flat_map(f32::to_le_bytes))
+            .zip(sample_bytes.iter_mut())
+            .for_each(|(a, b)| *b = a);
+
+        let mut base64_bytes = [0; 64];
+        let len = base64::prelude::BASE64_STANDARD_NO_PAD
+            .encode_slice(sample_bytes, &mut base64_bytes)
+            .unwrap();
+        let b64_str = str::from_utf8(&base64_bytes[0..len]).unwrap();
+
         match sample {
-            lsm6ds3::SampleEvent::Ok(sample) => log::info!("{sample:0.4?}"),
-            lsm6ds3::SampleEvent::Lagged(sample) => log::warn!("{sample:?}"),
+            lsm6ds3::SampleEvent::Ok(sample) => info!("{sample:0.4?}, B64:{b64_str}"),
+            lsm6ds3::SampleEvent::Lagged(sample) => warn!("{sample:0.4?}, B64:{b64_str}"),
         }
+
+        sample_count = sample_count.wrapping_add(1);
     }
 }

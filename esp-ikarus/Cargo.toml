@@ -30,6 +30,7 @@ critical-section = "1.2.0"
 static_cell      = "2.1.1"
 thiserror = { version = "2.0.17", default-features = false }
 futures = { version = "0.3.31", default-features = false, features = ["async-await"] }
+base64 = { version = "0.22.1", default-features = false }
 
 [profile.dev]
 # Rust debug is too slow.

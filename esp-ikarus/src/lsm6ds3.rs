@@ -91,9 +91,9 @@ const FIFO_THRESHOLD: usize = SAMPLES_IN_FIFO * ENTRIES_PER_SAMPLE * WORDS_PER_E
 
 #[derive(Debug, Clone, Copy)]
 pub struct Sample {
-    gy: [f32; 3],
-    xl: [f32; 3],
-    temp: [f32; 3],
+    pub gy: [f32; 3],
+    pub xl: [f32; 3],
+    pub temp: [f32; 3],
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -214,8 +214,6 @@ async fn read_imu_task(
             leftover_len = leftover.len();
             buf.copy_within(raw_samples_bytes..(raw_samples_bytes + leftover_len), 0);
         }
-
-        // log::info!("{} / {}", samples.len() * 6, status.unread_words);
     }
 }
 
