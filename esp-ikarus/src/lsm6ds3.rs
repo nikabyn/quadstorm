@@ -183,8 +183,8 @@ async fn read_imu_task(
             let raw_samples_bytes = raw_samples.as_flattened().len();
 
             for [rx, ry, rz, ax, ay, az, t0, t1, t2] in raw_samples.iter().copied() {
-                const MG_PER_LSB: f32 = 0.244; // 8g
-                const MDPS_PER_LSB: f32 = 0.035; // 1000dps
+                const MG_PER_LSB: f32 = 0.244; // Scale: 8g
+                const MDPS_PER_LSB: f32 = 0.035; // Scale: 1000dps
 
                 let rx = i16::from_le_bytes(rx) as f32 * MDPS_PER_LSB;
                 let ry = i16::from_le_bytes(ry) as f32 * MDPS_PER_LSB;

@@ -16,8 +16,8 @@ use embassy_time::{Duration, Timer};
 use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
 use esp_hal::timer::timg::TimerGroup;
-use esp_ikarus::lsm6ds3;
-use log::{info, warn};
+use esp_ikarus::bmi323;
+use log::info;
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
@@ -36,9 +36,9 @@ async fn main(spawner: Spawner) -> ! {
 
     info!("Embassy initialized!");
 
-    let miso = p.GPIO0;
+    let poci = p.GPIO0;
     let imu_cs = p.GPIO1;
-    let mosi = p.GPIO2;
+    let pico = p.GPIO2;
     let sck = p.GPIO3;
     let imu_int1 = p.GPIO14;
     let imu_spi = p.SPI2;
@@ -47,16 +47,15 @@ async fn main(spawner: Spawner) -> ! {
     // SPI
     log::info!("IMU init..");
 
-    let mut imu = lsm6ds3::LSM6DS3::new(imu_spi, sck, mosi, miso, imu_dma, imu_cs, imu_int1);
+    let mut imu = bmi323::BMI323::new(imu_spi, sck, pico, poci, imu_dma, imu_cs, imu_int1);
     imu.configure().await.unwrap();
 
     log::info!("IMU ready");
 
     let (imu_rx, imu_task) = {
-        static mut CHANNEL_BUF: MaybeUninit<[lsm6ds3::SampleEvent; 8]> =
-            core::mem::MaybeUninit::uninit();
+        static mut CHANNEL_BUF: MaybeUninit<[bmi323::Sample; 8]> = core::mem::MaybeUninit::uninit();
         static mut CHANNEL: LazyLock<
-            embassy_sync::zerocopy_channel::Channel<'static, NoopRawMutex, lsm6ds3::SampleEvent>,
+            embassy_sync::zerocopy_channel::Channel<'static, NoopRawMutex, bmi323::Sample>,
         > = LazyLock::new(|| {
             #[allow(static_mut_refs)]
             embassy_sync::zerocopy_channel::Channel::new(unsafe { CHANNEL_BUF.assume_init_mut() })
@@ -77,26 +76,19 @@ async fn main(spawner: Spawner) -> ! {
 
 #[embassy_executor::task]
 async fn imu_consumer(
-    mut rx: embassy_sync::zerocopy_channel::Receiver<'static, NoopRawMutex, lsm6ds3::SampleEvent>,
+    mut rx: embassy_sync::zerocopy_channel::Receiver<'static, NoopRawMutex, bmi323::Sample>,
 ) {
-    let mut sample_count = 0u64;
-
     loop {
         let sample = *rx.receive().await;
         rx.receive_done();
 
-        let (tag, lsm6ds3::Sample { gy, xl, temp }) = match sample {
-            lsm6ds3::SampleEvent::Ok(sample) => (b"O", sample),
-            lsm6ds3::SampleEvent::Lagged(sample) => (b"L", sample),
-        };
+        let bmi323::Sample { gy, xl, time } = sample;
 
-        let mut sample_bytes = [0; { 1 + 8 + (3 * 3 * 4) }];
-        tag.iter()
-            .copied()
-            .chain(sample_count.to_le_bytes().into_iter())
-            .chain(gy.into_iter().flat_map(f32::to_le_bytes))
+        let mut sample_bytes = [0; { (4 * 3 * 2) + 2 }];
+        gy.into_iter()
+            .flat_map(f32::to_le_bytes)
             .chain(xl.into_iter().flat_map(f32::to_le_bytes))
-            .chain(temp.into_iter().flat_map(f32::to_le_bytes))
+            .chain(time.to_le_bytes().into_iter())
             .zip(sample_bytes.iter_mut())
             .for_each(|(a, b)| *b = a);
 
@@ -106,11 +98,6 @@ async fn imu_consumer(
             .unwrap();
         let b64_str = str::from_utf8(&base64_bytes[0..len]).unwrap();
 
-        match sample {
-            lsm6ds3::SampleEvent::Ok(sample) => info!("{sample:0.4?}, B64:{b64_str}"),
-            lsm6ds3::SampleEvent::Lagged(sample) => warn!("{sample:0.4?}, B64:{b64_str}"),
-        }
-
-        sample_count = sample_count.wrapping_add(1);
+        info!("{sample:0.5?}, B64:{b64_str}");
     }
 }
