@@ -6,25 +6,29 @@
     holding buffers for the duration of a data transfer."
 )]
 
-use core::mem::MaybeUninit;
-
-use base64::Engine;
-use embassy_executor::Spawner;
-use embassy_sync::blocking_mutex::raw::NoopRawMutex;
-use embassy_sync::lazy_lock::LazyLock;
 use embassy_time::{Duration, Timer};
 use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
 use esp_hal::timer::timg::TimerGroup;
-use esp_ikarus::bmi323;
-use log::info;
+use esp_hal::usb_serial_jtag::UsbSerialJtag;
+use esp_ikarus::motors::Motors;
+use log::{info, warn};
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
 esp_bootloader_esp_idf::esp_app_desc!();
 
+// Initializes and arms the ESCs at GPIO5-GPIO8 and waits for input
+// send a numeric ascii value 0..=1000 to change current throttle.
+// send "RAMP" to enter a program to ramp the motor up and down.
+// send "RAMP" again to leave.
+//
+// $ echo 100 > /dev/ttyACM0 # set throttle 100
+// $ echo 1000 > /dev/ttyACM0 # set max throttle
+// $ echo RAMP > /dev/ttyACM0 # enter ramping program
+
 #[esp_rtos::main]
-async fn main(spawner: Spawner) -> ! {
+async fn main(_spawner: embassy_executor::Spawner) -> ! {
     esp_println::logger::init_logger_from_env();
 
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
@@ -36,68 +40,79 @@ async fn main(spawner: Spawner) -> ! {
 
     info!("Embassy initialized!");
 
-    let poci = p.GPIO0;
-    let imu_cs = p.GPIO1;
-    let pico = p.GPIO2;
-    let sck = p.GPIO3;
-    let imu_int1 = p.GPIO14;
-    let imu_spi = p.SPI2;
-    let imu_dma = p.DMA_CH0;
+    let mut motors = Motors::new(p.MCPWM0, p.GPIO5, p.GPIO6, p.GPIO7, p.GPIO8);
+    motors.arm().await;
 
-    // SPI
-    log::info!("IMU init..");
-
-    let mut imu = bmi323::BMI323::new(imu_spi, sck, pico, poci, imu_dma, imu_cs, imu_int1);
-    imu.configure().await.unwrap();
-
-    log::info!("IMU ready");
-
-    let (imu_rx, imu_task) = {
-        static mut CHANNEL_BUF: MaybeUninit<[bmi323::Sample; 8]> = core::mem::MaybeUninit::uninit();
-        static mut CHANNEL: LazyLock<
-            embassy_sync::zerocopy_channel::Channel<'static, NoopRawMutex, bmi323::Sample>,
-        > = LazyLock::new(|| {
-            #[allow(static_mut_refs)]
-            embassy_sync::zerocopy_channel::Channel::new(unsafe { CHANNEL_BUF.assume_init_mut() })
-        });
-
-        #[allow(static_mut_refs)]
-        imu.start(unsafe { CHANNEL.get_mut() })
-    };
-
-    spawner.must_spawn(imu_consumer(imu_rx));
-    spawner.must_spawn(imu_task);
+    let (mut rx, _tx) = UsbSerialJtag::new(p.USB_DEVICE).into_async().split();
+    let mut buf = [0; 5];
+    let mut len = 0;
+    let mut ramp = false;
 
     loop {
-        log::info!("still alive");
-        Timer::after(Duration::from_secs(10)).await;
-    }
-}
+        len = rx.drain_rx_fifo(&mut buf[len..]);
+        if len > 0 {
+            let throttle = match buf {
+                [b'R', b'A', b'M', b'P', b'\n'] => {
+                    ramp = !ramp;
+                    continue;
+                }
+                [a @ b'0'..=b'9', b'\n', ..] => (a - b'0') as u16,
+                [b @ b'0'..=b'9', a @ b'0'..=b'9', b'\n', ..] => {
+                    10 * (b - b'0') as u16 + (a - b'0') as u16
+                }
+                [c @ b'0'..=b'9', b @ b'0'..=b'9', a @ b'0'..=b'9', b'\n', ..] => {
+                    100 * (c - b'0') as u16 + 10 * (b - b'0') as u16 + (a - b'0') as u16
+                }
+                [
+                    d @ b'0'..=b'9',
+                    c @ b'0'..=b'9',
+                    b @ b'0'..=b'9',
+                    a @ b'0'..=b'9',
+                    b'\n',
+                    ..,
+                ] => {
+                    1000 * (d - b'0') as u16
+                        + 100 * (c - b'0') as u16
+                        + 10 * (b - b'0') as u16
+                        + (a - b'0') as u16
+                }
+                _ if len == 5 => {
+                    warn!("discarding bytes");
+                    len = 0;
+                    continue;
+                }
+                _ if buf[0..len].contains(&b'\n') => {
+                    warn!("discarding bytes");
+                    len = 0;
+                    continue;
+                }
+                _ => continue,
+            }
+            .clamp(0, 1000);
 
-#[embassy_executor::task]
-async fn imu_consumer(
-    mut rx: embassy_sync::zerocopy_channel::Receiver<'static, NoopRawMutex, bmi323::Sample>,
-) {
-    loop {
-        let sample = *rx.receive().await;
-        rx.receive_done();
+            let raw_throttle = throttle + 1000;
+            motors.set_throttle([raw_throttle; 4]);
+            log::info!("throttle: {throttle}, raw_throttle: {raw_throttle}");
+        }
 
-        let bmi323::Sample { gy, xl, time } = sample;
+        if ramp {
+            for throttle in 0..=1000 {
+                let raw_throttle = throttle + 1000;
+                motors.set_throttle([raw_throttle; 4]);
+                log::info!("throttle: {throttle}, raw_throttle: {raw_throttle}");
+                Timer::after(Duration::from_millis(2)).await;
+            }
 
-        let mut sample_bytes = [0; { (4 * 3 * 2) + 2 }];
-        gy.into_iter()
-            .flat_map(f32::to_le_bytes)
-            .chain(xl.into_iter().flat_map(f32::to_le_bytes))
-            .chain(time.to_le_bytes().into_iter())
-            .zip(sample_bytes.iter_mut())
-            .for_each(|(a, b)| *b = a);
+            Timer::after(Duration::from_secs(3)).await;
 
-        let mut base64_bytes = [0; 64];
-        let len = base64::prelude::BASE64_STANDARD_NO_PAD
-            .encode_slice(sample_bytes, &mut base64_bytes)
-            .unwrap();
-        let b64_str = str::from_utf8(&base64_bytes[0..len]).unwrap();
+            for throttle in (0..=1000).rev() {
+                let raw_throttle = throttle + 1000;
+                motors.set_throttle([raw_throttle; 4]);
+                log::info!("throttle: {throttle}, raw_throttle: {raw_throttle}");
+                Timer::after(Duration::from_millis(2)).await;
+            }
 
-        info!("{sample:0.5?}, B64:{b64_str}");
+            Timer::after(Duration::from_secs(5)).await;
+        }
     }
 }
