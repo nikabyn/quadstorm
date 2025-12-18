@@ -8,8 +8,8 @@ use esp_hal::{
     rmt::{Channel, PulseCode, Rmt, Tx, TxChannelConfig, TxChannelCreator},
     time::Rate,
 };
-
-pub struct DShot;
+use esp_println::dbg;
+use log::error;
 
 pub trait Protocol {
     const RATE: Rate;
@@ -17,8 +17,56 @@ pub trait Protocol {
 
     fn encode_throttle(throttle: u16) -> ([PulseCode; 17], usize);
 }
-
 pub trait Analog: Protocol {}
+
+pub struct DShot300;
+
+impl DShot300 {
+    fn encode_frame(value: u16) -> [PulseCode; 17] {
+        let value = value << 5;
+        let crc = (value ^ (value >> 4) ^ (value >> 8)) & 0x0F;
+
+        let frame = (value | crc).reverse_bits();
+
+        let mut pulse = [PulseCode::end_marker(); 17];
+
+        const ONE_HIGH: u16 = 200;
+        const ONE_LOW: u16 = 66;
+        const ZERO_HIGH: u16 = 100;
+        const ZERO_LOW: u16 = 166;
+
+        for i in 0..16 {
+            let bit = ((frame >> i) & 0b1) == 0b1;
+
+            let (high, low) = match bit {
+                true => (ONE_HIGH, ONE_LOW),
+                false => (ZERO_HIGH, ZERO_LOW),
+            };
+
+            pulse[i] = PulseCode::new(Level::High, high, Level::Low, low);
+        }
+
+        pulse
+    }
+}
+
+impl Protocol for DShot300 {
+    // 80Mhz -> 0.0125us
+    // 1 = 200 clock cycles high (2.5us) + 66.4 clock cycles low (0.83us)
+    // 0 = 100 clock cycles high (1.25us) + 166.4 clock cycles low (2.08us)
+    const RATE: Rate = Rate::from_mhz(80);
+
+    const CLK_DIV: u8 = 1;
+
+    // 11 bits: throttle
+    // 1 bit: send back telemetry
+    // 4 bit: crc
+    fn encode_throttle(throttle: u16) -> ([PulseCode; 17], usize) {
+        // convert 0..=1000 range to 48..=2047
+        let raw_throttle = (throttle * 2 + 48).min(2047);
+        (Self::encode_frame(raw_throttle), 17)
+    }
+}
 
 pub struct OneShot125;
 impl Analog for OneShot125 {}
@@ -92,6 +140,16 @@ impl Motors<OneShot42> {
     }
 }
 
+impl Motors<DShot300> {
+    pub async fn dshot(
+        rmt: RMT<'static>,
+        data_pin: impl PeripheralOutput<'static>,
+        mux_slct: (impl OutputPin + 'static, impl OutputPin + 'static),
+    ) -> Self {
+        Self::new(rmt, data_pin, mux_slct).await
+    }
+}
+
 impl<Proto: Protocol> Motors<Proto> {
     pub async fn new(
         rmt: RMT<'static>,
@@ -125,7 +183,7 @@ impl<Proto: Protocol> Motors<Proto> {
     async fn send_throttle(&mut self, throttle: u16) {
         let (pulse, len) = Proto::encode_throttle(throttle);
         if let Err(e) = self.data.transmit(&pulse[0..len]).await {
-            log::error!("unable to transmit oneshot125 pulse: {e:?}");
+            log::error!("unable to transmit rmt pulse: {e:?}");
         }
     }
 
@@ -192,6 +250,44 @@ impl<Proto: Analog> Motors<Proto> {
         let end = Instant::now().saturating_add(Duration::from_secs(4));
         while Instant::now() <= end {
             self.send_throttles([1000; 4]).await;
+        }
+    }
+}
+
+impl Motors<DShot300> {
+    pub async fn arm(&mut self) {
+        // Reset
+        let end = Instant::now().saturating_add(Duration::from_secs(3));
+        while Instant::now() <= end {
+            let pulse = DShot300::encode_frame(0);
+
+            self.mux_slct[0].set_low();
+            self.mux_slct[1].set_low();
+            if let Err(e) = self.data.transmit(&pulse).await {
+                log::error!("unable to transmit dshot pulse: {e:?}");
+            }
+
+            self.mux_slct[0].set_low();
+            self.mux_slct[1].set_high();
+            if let Err(e) = self.data.transmit(&pulse).await {
+                log::error!("unable to transmit dshot pulse: {e:?}");
+            }
+
+            self.mux_slct[0].set_high();
+            self.mux_slct[1].set_low();
+            if let Err(e) = self.data.transmit(&pulse).await {
+                log::error!("unable to transmit dshot pulse: {e:?}");
+            }
+
+            self.mux_slct[1].set_high();
+            self.mux_slct[1].set_high();
+            if let Err(e) = self.data.transmit(&pulse).await {
+                log::error!("unable to transmit dshot pulse: {e:?}");
+            }
+        }
+        let end = Instant::now().saturating_add(Duration::from_secs(1));
+        while Instant::now() <= end {
+            self.send_throttle(0).await;
         }
     }
 }

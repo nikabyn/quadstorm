@@ -42,8 +42,9 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
     // let mut motors =
     //     esp_ikarus::motors::pwm::Motors::new(p.MCPWM0, p.GPIO5, p.GPIO6, p.GPIO7, p.GPIO8);
     let mut motors =
-        esp_ikarus::motors::rmt::Motors::oneshot42(p.RMT, p.GPIO5, (p.GPIO6, p.GPIO7)).await;
+        esp_ikarus::motors::rmt::Motors::dshot(p.RMT, p.GPIO5, (p.GPIO3, p.GPIO4)).await;
     motors.arm().await;
+    // motors.calibrate().await;
 
     let (mut rx, _tx) = UsbSerialJtag::new(p.USB_DEVICE).into_async().split();
     let mut buf = [0; 5];
