@@ -6,12 +6,11 @@
     holding buffers for the duration of a data transfer."
 )]
 
-use embassy_time::{Duration, Timer};
+use embassy_time::{Duration, Instant, Timer};
 use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
 use esp_hal::timer::timg::TimerGroup;
 use esp_hal::usb_serial_jtag::UsbSerialJtag;
-use esp_ikarus::motors::Motors;
 use log::{info, warn};
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
@@ -40,7 +39,10 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
 
     info!("Embassy initialized!");
 
-    let mut motors = Motors::new(p.MCPWM0, p.GPIO5, p.GPIO6, p.GPIO7, p.GPIO8);
+    // let mut motors =
+    //     esp_ikarus::motors::pwm::Motors::new(p.MCPWM0, p.GPIO5, p.GPIO6, p.GPIO7, p.GPIO8);
+    let mut motors =
+        esp_ikarus::motors::rmt::Motors::oneshot42(p.RMT, p.GPIO5, (p.GPIO6, p.GPIO7)).await;
     motors.arm().await;
 
     let (mut rx, _tx) = UsbSerialJtag::new(p.USB_DEVICE).into_async().split();
@@ -48,10 +50,12 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
     let mut len = 0;
     let mut ramp = false;
 
+    let mut throttle = 0;
+
     loop {
         len = rx.drain_rx_fifo(&mut buf[len..]);
         if len > 0 {
-            let throttle = match buf {
+            throttle = match buf {
                 [b'R', b'A', b'M', b'P', b'\n'] => {
                     ramp = !ramp;
                     continue;
@@ -89,30 +93,35 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
                 _ => continue,
             }
             .clamp(0, 1000);
-
-            let raw_throttle = throttle + 1000;
-            motors.set_throttle([raw_throttle; 4]);
-            log::info!("throttle: {throttle}, raw_throttle: {raw_throttle}");
+            log::info!("throttle: {throttle}");
         }
 
         if ramp {
             for throttle in 0..=1000 {
-                let raw_throttle = throttle + 1000;
-                motors.set_throttle([raw_throttle; 4]);
-                log::info!("throttle: {throttle}, raw_throttle: {raw_throttle}");
-                Timer::after(Duration::from_millis(2)).await;
+                let now = Instant::now();
+                log::info!("throttle: {throttle}");
+                motors.send_throttles([throttle; 4]).await;
+                Timer::at(now.saturating_add(Duration::from_millis(2))).await;
             }
+            throttle = 1000;
 
-            Timer::after(Duration::from_secs(3)).await;
+            let end = Instant::now().saturating_add(Duration::from_secs(3));
+            while Instant::now() <= end {
+                let now = Instant::now();
+                motors.send_throttles([throttle; 4]).await;
+                Timer::at(now.saturating_add(Duration::from_millis(2))).await;
+            }
 
             for throttle in (0..=1000).rev() {
-                let raw_throttle = throttle + 1000;
-                motors.set_throttle([raw_throttle; 4]);
-                log::info!("throttle: {throttle}, raw_throttle: {raw_throttle}");
+                motors.send_throttles([throttle; 4]).await;
+                log::info!("throttle: {throttle}");
                 Timer::after(Duration::from_millis(2)).await;
             }
-
-            Timer::after(Duration::from_secs(5)).await;
+            throttle = 0;
         }
+
+        let now = Instant::now();
+        motors.send_throttles([throttle; 4]).await;
+        Timer::at(now.saturating_add(Duration::from_millis(2))).await;
     }
 }

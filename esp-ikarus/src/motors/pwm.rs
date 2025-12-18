@@ -68,7 +68,7 @@ impl<PWM: PwmPeripheral + 'static> Motors<PWM> {
         }
     }
 
-    pub fn set_throttle(&mut self, throttles: [u16; 4]) {
+    pub async fn send_throttles(&mut self, throttles: [u16; 4]) {
         self.escs.0.set_timestamp(throttles[0]);
         self.escs.1.set_timestamp(throttles[1]);
         self.escs.2.set_timestamp(throttles[2]);
@@ -76,11 +76,11 @@ impl<PWM: PwmPeripheral + 'static> Motors<PWM> {
     }
 
     pub async fn arm(&mut self) {
-        self.set_throttle([0; 4]);
+        self.send_throttles([0; 4]).await;
         Timer::after_millis(1000).await;
-        self.set_throttle([1200; 4]);
+        self.send_throttles([1200; 4]).await;
         Timer::after_millis(1000).await;
-        self.set_throttle([1000; 4]);
+        self.send_throttles([1000; 4]).await;
         Timer::after_millis(1000).await;
     }
 }
