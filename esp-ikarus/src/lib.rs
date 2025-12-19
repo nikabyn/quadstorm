@@ -1,5 +1,6 @@
 #![no_std]
-#![feature(maybe_uninit_uninit_array_transpose)]
+#![allow(internal_features)]
+#![feature(negative_impls)]
 
 pub mod bmi323;
 pub mod lsm6ds3;

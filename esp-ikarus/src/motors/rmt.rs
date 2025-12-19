@@ -1,4 +1,4 @@
-use core::{marker::PhantomData, mem::MaybeUninit};
+use core::marker::PhantomData;
 
 use embassy_time::{Duration, Instant};
 use esp_hal::{
@@ -8,38 +8,45 @@ use esp_hal::{
     rmt::{Channel, PulseCode, Rmt, Tx, TxChannelConfig, TxChannelCreator},
     time::Rate,
 };
-use esp_println::dbg;
-use log::error;
 
 pub trait Protocol {
     const RATE: Rate;
     const CLK_DIV: u8;
 
-    fn encode_throttle(throttle: u16) -> impl AsRef<[PulseCode]>;
+    /// transforms a throttle from 0..=2000 into protocol range
+    fn throttle_transform(throttle: u16) -> u16;
+    fn encode_pulse(value: u16) -> impl AsRef<[PulseCode]>;
 }
-pub trait Analog: Protocol {}
 
-pub struct DShot300;
-impl DShot300 {
-    fn encode_frame(value: u16) -> [PulseCode; 17] {
-        let value = value << 5;
-        let crc = (value ^ (value >> 4) ^ (value >> 8)) & 0x0F;
+pub trait DShot: Protocol {
+    const ONE_HI: u16;
+    const ONE_LO: u16;
+    const ZERO_HI: u16;
+    const ZERO_LO: u16;
 
-        let frame = (value | crc).reverse_bits();
+    /// Encodes a value into a dshot frame
+    ///
+    /// 11 bits: throttle
+    /// 1 bit: send back telemetry
+    /// 4 bit: crc
+    fn encode_frame(value: u16, telemetry_request: bool) -> impl AsRef<[PulseCode]> {
+        assert!(value < 2048, "dshot max value is 2047");
+
+        let telemetry_request = match telemetry_request {
+            true => 1 << 4,
+            false => 0,
+        };
+        let frame = value << 5 | telemetry_request;
+        let crc = (frame ^ (frame >> 4) ^ (frame >> 8)) & 0x0F;
+        let frame = (frame | crc).reverse_bits();
 
         let mut pulse = [PulseCode::end_marker(); 17];
-
-        const ONE_HIGH: u16 = 200;
-        const ONE_LOW: u16 = 66;
-        const ZERO_HIGH: u16 = 100;
-        const ZERO_LOW: u16 = 166;
-
         for i in 0..16 {
             let bit = ((frame >> i) & 0b1) == 0b1;
 
             let (high, low) = match bit {
-                true => (ONE_HIGH, ONE_LOW),
-                false => (ZERO_HIGH, ZERO_LOW),
+                true => (Self::ONE_HI, Self::ONE_LO),
+                false => (Self::ZERO_HI, Self::ZERO_LO),
             };
 
             pulse[i] = PulseCode::new(Level::High, high, Level::Low, low);
@@ -47,28 +54,117 @@ impl DShot300 {
 
         pulse
     }
+
+    fn throttle_transform(throttle: u16) -> u16 {
+        throttle.min(1999) + 48
+    }
 }
 
-impl Protocol for DShot300 {
-    // 80Mhz -> 0.0125us
-    // 1 = 200 clock cycles high (2.5us) + 66.4 clock cycles low (0.83us)
-    // 0 = 100 clock cycles high (1.25us) + 166.4 clock cycles low (2.08us)
-    const RATE: Rate = Rate::from_mhz(80);
-
+/// DShot 600
+/// Bit length: 1.670µs
+/// One High:   1.250µs
+/// Zero High:  0.625µs
+///
+/// With a frequency of 48MHz:
+///
+/// 1: 60 clock cycles high + 20 clock cycles low
+/// 0: 30 clock cycles high + 50 clock cycles low
+pub struct DShot600;
+impl DShot for DShot600 {
+    const ONE_HI: u16 = 60;
+    const ONE_LO: u16 = 20;
+    const ZERO_HI: u16 = 30;
+    const ZERO_LO: u16 = 50;
+}
+impl Protocol for DShot600 {
+    const RATE: Rate = Rate::from_mhz(48);
     const CLK_DIV: u8 = 1;
 
-    // 11 bits: throttle
-    // 1 bit: send back telemetry
-    // 4 bit: crc
-    fn encode_throttle(throttle: u16) -> impl AsRef<[PulseCode]> {
-        // convert 0..=1000 range to 48..=2047
-        let raw_throttle = (throttle * 2 + 48).min(2047);
-        Self::encode_frame(raw_throttle)
+    fn throttle_transform(throttle: u16) -> u16 {
+        <Self as DShot>::throttle_transform(throttle)
+    }
+
+    fn encode_pulse(value: u16) -> impl AsRef<[PulseCode]> {
+        Self::encode_frame(value, false)
+    }
+}
+
+/// DShot 300
+/// Bit length: 3.33µs
+/// One High:   2.50µs
+/// Zero High:  1.25µs
+///
+/// With a frequency of (48/2)MHz:
+///
+/// 1: 120 clock cycles high + 40 clock cycles low
+/// 0: 60 clock cycles high + 100 clock cycles low
+pub struct DShot300;
+impl DShot for DShot300 {
+    const ONE_HI: u16 = 60;
+    const ONE_LO: u16 = 20;
+    const ZERO_HI: u16 = 30;
+    const ZERO_LO: u16 = 50;
+}
+impl Protocol for DShot300 {
+    const RATE: Rate = Rate::from_mhz(48);
+    const CLK_DIV: u8 = 2;
+
+    fn throttle_transform(throttle: u16) -> u16 {
+        <Self as DShot>::throttle_transform(throttle)
+    }
+
+    fn encode_pulse(value: u16) -> impl AsRef<[PulseCode]> {
+        Self::encode_frame(value, false)
+    }
+}
+
+/// DShot 150
+/// Bit length: 6.67µs
+/// One High:   5.00µs
+/// Zero High:  2.50µs
+///
+/// With a frequency of (48/4)MHz:
+///
+/// 1: 120 clock cycles high + 40 clock cycles low
+/// 0: 60 clock cycles high + 100 clock cycles low
+pub struct DShot150;
+impl DShot for DShot150 {
+    const ONE_HI: u16 = 60;
+    const ONE_LO: u16 = 20;
+    const ZERO_HI: u16 = 30;
+    const ZERO_LO: u16 = 50;
+}
+impl Protocol for DShot150 {
+    const RATE: Rate = Rate::from_mhz(48);
+    const CLK_DIV: u8 = 4;
+
+    fn throttle_transform(throttle: u16) -> u16 {
+        <Self as DShot>::throttle_transform(throttle)
+    }
+
+    fn encode_pulse(value: u16) -> impl AsRef<[PulseCode]> {
+        Self::encode_frame(value, false)
+    }
+}
+
+pub trait OneShot: Protocol {
+    fn throttle_transform(throttle: u16) -> u16 {
+        (throttle / 2).min(1000) + 1000
+    }
+
+    fn encode_oneshot_pulse(value: u16) -> impl AsRef<[PulseCode]> {
+        // Low length of 0 is ok because we multiplex that line.
+        // For the time we talk to the other esc the line is low anyway,
+        // so we don't have to wait for it here.
+        [
+            PulseCode::new(Level::High, value, Level::Low, 0),
+            PulseCode::end_marker(),
+        ]
     }
 }
 
 pub struct OneShot125;
-impl Analog for OneShot125 {}
+impl OneShot for OneShot125 {}
 impl Protocol for OneShot125 {
     // 8 MHz -> 0.125µs
     // throttle = 1000 => pulse of 125µs which is 0 for OneShot125
@@ -76,21 +172,17 @@ impl Protocol for OneShot125 {
     const RATE: Rate = Rate::from_mhz(8);
     const CLK_DIV: u8 = 1;
 
-    fn encode_throttle(throttle: u16) -> impl AsRef<[PulseCode]> {
-        let raw_throttle = throttle.min(1000) + 1000;
+    fn throttle_transform(throttle: u16) -> u16 {
+        <Self as OneShot>::throttle_transform(throttle)
+    }
 
-        // Low length of 0 is ok because we multiplex that line.
-        // For the time we talk to the other esc the line is low anyway,
-        // so we don't have to wait for it here.
-        [
-            PulseCode::new(Level::High, raw_throttle, Level::Low, 0),
-            PulseCode::end_marker(),
-        ]
+    fn encode_pulse(value: u16) -> impl AsRef<[PulseCode]> {
+        Self::encode_oneshot_pulse(value)
     }
 }
 
 pub struct OneShot42;
-impl Analog for OneShot42 {}
+impl OneShot for OneShot42 {}
 impl Protocol for OneShot42 {
     // 24 MHz -> ~0.042µs
     // throttle = 1000 => pulse of 42µs which is 0 for OneShot42
@@ -98,16 +190,12 @@ impl Protocol for OneShot42 {
     const RATE: Rate = Rate::from_mhz(24);
     const CLK_DIV: u8 = 1;
 
-    fn encode_throttle(throttle: u16) -> impl AsRef<[PulseCode]> {
-        let raw_throttle = throttle.min(1000) + 1000;
+    fn throttle_transform(throttle: u16) -> u16 {
+        <Self as OneShot>::throttle_transform(throttle)
+    }
 
-        // Low length of 0 is ok because we multiplex that line.
-        // For the time we talk to the other esc the line is low anyway,
-        // so we don't have to wait for it here.
-        [
-            PulseCode::new(Level::High, raw_throttle, Level::Low, 0),
-            PulseCode::end_marker(),
-        ]
+    fn encode_pulse(value: u16) -> impl AsRef<[PulseCode]> {
+        Self::encode_oneshot_pulse(value)
     }
 }
 
@@ -115,36 +203,6 @@ pub struct Motors<Protocol> {
     data: Channel<'static, Async, Tx>,
     mux_slct: [Output<'static>; 2],
     protocol: PhantomData<Protocol>,
-}
-
-impl Motors<OneShot125> {
-    pub async fn oneshot125(
-        rmt: RMT<'static>,
-        data_pin: impl PeripheralOutput<'static>,
-        mux_slct: (impl OutputPin + 'static, impl OutputPin + 'static),
-    ) -> Self {
-        Self::new(rmt, data_pin, mux_slct).await
-    }
-}
-
-impl Motors<OneShot42> {
-    pub async fn oneshot42(
-        rmt: RMT<'static>,
-        data_pin: impl PeripheralOutput<'static>,
-        mux_slct: (impl OutputPin + 'static, impl OutputPin + 'static),
-    ) -> Self {
-        Self::new(rmt, data_pin, mux_slct).await
-    }
-}
-
-impl Motors<DShot300> {
-    pub async fn dshot(
-        rmt: RMT<'static>,
-        data_pin: impl PeripheralOutput<'static>,
-        mux_slct: (impl OutputPin + 'static, impl OutputPin + 'static),
-    ) -> Self {
-        Self::new(rmt, data_pin, mux_slct).await
-    }
 }
 
 impl<Proto: Protocol> Motors<Proto> {
@@ -167,8 +225,8 @@ impl<Proto: Protocol> Motors<Proto> {
             )
             .expect("rmt tx channel 0");
 
-        let mux_slct0 = Output::new(mux_slct.0, Level::Low, OutputConfig::default());
-        let mux_slct1 = Output::new(mux_slct.1, Level::Low, OutputConfig::default());
+        let mux_slct0 = Output::new(mux_slct.1, Level::Low, OutputConfig::default());
+        let mux_slct1 = Output::new(mux_slct.0, Level::Low, OutputConfig::default());
 
         Self {
             data: channel,
@@ -177,34 +235,39 @@ impl<Proto: Protocol> Motors<Proto> {
         }
     }
 
-    async fn send_throttle(&mut self, throttle: u16) {
-        let pulse = Proto::encode_throttle(throttle);
+    async fn send_esc_value(&mut self, value: u16) {
+        let pulse = Proto::encode_pulse(value);
         if let Err(e) = self.data.transmit(pulse.as_ref()).await {
             log::error!("unable to transmit rmt pulse: {e:?}");
         }
     }
 
-    pub async fn send_throttles(&mut self, throttles: [u16; 4]) {
+    pub async fn send_esc_values(&mut self, values: [u16; 4]) {
         self.mux_slct[0].set_low();
         self.mux_slct[1].set_low();
-        self.send_throttle(throttles[0]).await;
+        self.send_esc_value(values[0]).await;
 
         self.mux_slct[0].set_low();
         self.mux_slct[1].set_high();
-        self.send_throttle(throttles[1]).await;
+        self.send_esc_value(values[1]).await;
 
         self.mux_slct[0].set_high();
         self.mux_slct[1].set_low();
-        self.send_throttle(throttles[2]).await;
+        self.send_esc_value(values[2]).await;
 
         self.mux_slct[1].set_high();
         self.mux_slct[1].set_high();
-        self.send_throttle(throttles[3]).await;
+        self.send_esc_value(values[3]).await;
+    }
+
+    pub async fn send_throttles(&mut self, throttles: [u16; 4]) {
+        self.send_esc_values(throttles.map(Proto::throttle_transform))
+            .await
     }
 }
 
-impl<Proto: Analog> Motors<Proto> {
-    pub async fn arm(&mut self) {
+impl<Proto: OneShot> Motors<Proto> {
+    pub async fn arm_oneshot(&mut self) {
         // Reset
         let end = Instant::now().saturating_add(Duration::from_secs(1));
         while Instant::now() <= end {
@@ -251,40 +314,68 @@ impl<Proto: Analog> Motors<Proto> {
     }
 }
 
-impl Motors<DShot300> {
-    pub async fn arm(&mut self) {
+impl<Proto: DShot> Motors<Proto> {
+    pub async fn arm_dshot(&mut self) {
         // Reset
-        let end = Instant::now().saturating_add(Duration::from_secs(3));
-        while Instant::now() <= end {
-            let pulse = DShot300::encode_frame(0);
-
-            self.mux_slct[0].set_low();
-            self.mux_slct[1].set_low();
-            if let Err(e) = self.data.transmit(&pulse).await {
-                log::error!("unable to transmit dshot pulse: {e:?}");
-            }
-
-            self.mux_slct[0].set_low();
-            self.mux_slct[1].set_high();
-            if let Err(e) = self.data.transmit(&pulse).await {
-                log::error!("unable to transmit dshot pulse: {e:?}");
-            }
-
-            self.mux_slct[0].set_high();
-            self.mux_slct[1].set_low();
-            if let Err(e) = self.data.transmit(&pulse).await {
-                log::error!("unable to transmit dshot pulse: {e:?}");
-            }
-
-            self.mux_slct[1].set_high();
-            self.mux_slct[1].set_high();
-            if let Err(e) = self.data.transmit(&pulse).await {
-                log::error!("unable to transmit dshot pulse: {e:?}");
-            }
-        }
         let end = Instant::now().saturating_add(Duration::from_secs(1));
         while Instant::now() <= end {
-            self.send_throttle(0).await;
+            self.send_esc_values([0; 4]).await;
         }
+
+        // Zero Throttle
+        let end = Instant::now().saturating_add(Duration::from_secs(1));
+        while Instant::now() <= end {
+            self.send_throttles([0; 4]).await;
+        }
+    }
+}
+
+impl Motors<OneShot125> {
+    pub async fn oneshot125(
+        rmt: RMT<'static>,
+        data_pin: impl PeripheralOutput<'static>,
+        mux_slct: (impl OutputPin + 'static, impl OutputPin + 'static),
+    ) -> Self {
+        Self::new(rmt, data_pin, mux_slct).await
+    }
+}
+
+impl Motors<OneShot42> {
+    pub async fn oneshot42(
+        rmt: RMT<'static>,
+        data_pin: impl PeripheralOutput<'static>,
+        mux_slct: (impl OutputPin + 'static, impl OutputPin + 'static),
+    ) -> Self {
+        Self::new(rmt, data_pin, mux_slct).await
+    }
+}
+
+impl Motors<DShot600> {
+    pub async fn dshot600(
+        rmt: RMT<'static>,
+        data_pin: impl PeripheralOutput<'static>,
+        mux_slct: (impl OutputPin + 'static, impl OutputPin + 'static),
+    ) -> Self {
+        Self::new(rmt, data_pin, mux_slct).await
+    }
+}
+
+impl Motors<DShot300> {
+    pub async fn dshot300(
+        rmt: RMT<'static>,
+        data_pin: impl PeripheralOutput<'static>,
+        mux_slct: (impl OutputPin + 'static, impl OutputPin + 'static),
+    ) -> Self {
+        Self::new(rmt, data_pin, mux_slct).await
+    }
+}
+
+impl Motors<DShot150> {
+    pub async fn dshot150(
+        rmt: RMT<'static>,
+        data_pin: impl PeripheralOutput<'static>,
+        mux_slct: (impl OutputPin + 'static, impl OutputPin + 'static),
+    ) -> Self {
+        Self::new(rmt, data_pin, mux_slct).await
     }
 }
