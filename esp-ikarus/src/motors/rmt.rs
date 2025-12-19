@@ -15,12 +15,11 @@ pub trait Protocol {
     const RATE: Rate;
     const CLK_DIV: u8;
 
-    fn encode_throttle(throttle: u16) -> ([PulseCode; 17], usize);
+    fn encode_throttle(throttle: u16) -> impl AsRef<[PulseCode]>;
 }
 pub trait Analog: Protocol {}
 
 pub struct DShot300;
-
 impl DShot300 {
     fn encode_frame(value: u16) -> [PulseCode; 17] {
         let value = value << 5;
@@ -61,10 +60,10 @@ impl Protocol for DShot300 {
     // 11 bits: throttle
     // 1 bit: send back telemetry
     // 4 bit: crc
-    fn encode_throttle(throttle: u16) -> ([PulseCode; 17], usize) {
+    fn encode_throttle(throttle: u16) -> impl AsRef<[PulseCode]> {
         // convert 0..=1000 range to 48..=2047
         let raw_throttle = (throttle * 2 + 48).min(2047);
-        (Self::encode_frame(raw_throttle), 17)
+        Self::encode_frame(raw_throttle)
     }
 }
 
@@ -77,17 +76,16 @@ impl Protocol for OneShot125 {
     const RATE: Rate = Rate::from_mhz(8);
     const CLK_DIV: u8 = 1;
 
-    fn encode_throttle(throttle: u16) -> ([PulseCode; 17], usize) {
+    fn encode_throttle(throttle: u16) -> impl AsRef<[PulseCode]> {
         let raw_throttle = throttle.min(1000) + 1000;
-        let mut pulse = MaybeUninit::uninit().transpose();
+
         // Low length of 0 is ok because we multiplex that line.
         // For the time we talk to the other esc the line is low anyway,
         // so we don't have to wait for it here.
-
-        pulse[0].write(PulseCode::new(Level::High, raw_throttle, Level::Low, 0));
-        pulse[1].write(PulseCode::end_marker());
-
-        (unsafe { pulse.transpose().assume_init() }, 2)
+        [
+            PulseCode::new(Level::High, raw_throttle, Level::Low, 0),
+            PulseCode::end_marker(),
+        ]
     }
 }
 
@@ -100,17 +98,16 @@ impl Protocol for OneShot42 {
     const RATE: Rate = Rate::from_mhz(24);
     const CLK_DIV: u8 = 1;
 
-    fn encode_throttle(throttle: u16) -> ([PulseCode; 17], usize) {
+    fn encode_throttle(throttle: u16) -> impl AsRef<[PulseCode]> {
         let raw_throttle = throttle.min(1000) + 1000;
-        let mut pulse = MaybeUninit::uninit().transpose();
+
         // Low length of 0 is ok because we multiplex that line.
         // For the time we talk to the other esc the line is low anyway,
         // so we don't have to wait for it here.
-
-        pulse[0].write(PulseCode::new(Level::High, raw_throttle, Level::Low, 0));
-        pulse[1].write(PulseCode::end_marker());
-
-        (unsafe { pulse.transpose().assume_init() }, 2)
+        [
+            PulseCode::new(Level::High, raw_throttle, Level::Low, 0),
+            PulseCode::end_marker(),
+        ]
     }
 }
 
@@ -181,8 +178,8 @@ impl<Proto: Protocol> Motors<Proto> {
     }
 
     async fn send_throttle(&mut self, throttle: u16) {
-        let (pulse, len) = Proto::encode_throttle(throttle);
-        if let Err(e) = self.data.transmit(&pulse[0..len]).await {
+        let pulse = Proto::encode_throttle(throttle);
+        if let Err(e) = self.data.transmit(pulse.as_ref()).await {
             log::error!("unable to transmit rmt pulse: {e:?}");
         }
     }
