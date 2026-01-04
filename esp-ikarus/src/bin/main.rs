@@ -39,12 +39,10 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
 
     info!("Embassy initialized!");
 
-    // let mut motors =
-    //     esp_ikarus::motors::pwm::Motors::new(p.MCPWM0, p.GPIO5, p.GPIO6, p.GPIO7, p.GPIO8);
     let mut motors =
-        esp_ikarus::motors::rmt::Motors::dshot600(p.RMT, p.GPIO5, (p.GPIO6, p.GPIO7)).await;
-    motors.arm_dshot().await;
-    // motors.calibrate().await;
+        // esp_ikarus::motors::rmt::Motors::dshot600(p.RMT, p.GPIO5, (p.GPIO6, p.GPIO7)).await;
+    esp_ikarus::motors::rmt::Motors::oneshot125(p.RMT, p.GPIO5, (p.GPIO6, p.GPIO7)).await;
+    // motors.arm_dshot().await;
 
     let (mut rx, _tx) = UsbSerialJtag::new(p.USB_DEVICE).into_async().split();
     let mut buf = [0; 5];
@@ -59,6 +57,12 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
             throttle = match buf {
                 [b'R', b'A', b'M', b'P', b'\n'] => {
                     ramp = !ramp;
+                    continue;
+                }
+                [b'A', b'R', b'M', b'\n', ..] => {
+                    ramp = false;
+                    throttle = 0;
+                    motors.arm_oneshot().await;
                     continue;
                 }
                 [a @ b'0'..=b'9', b'\n', ..] => (a - b'0') as u16,
@@ -93,18 +97,19 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
                 }
                 _ => continue,
             }
-            .clamp(0, 1000);
+            // .clamp(0, 2000);
+            .clamp(0, 2047);
             log::info!("throttle: {throttle}");
         }
 
         if ramp {
-            for throttle in 0..=1000 {
+            for throttle in 0..=2000 {
                 let now = Instant::now();
                 log::info!("throttle: {throttle}");
                 motors.send_throttles([throttle; 4]).await;
                 Timer::at(now.saturating_add(Duration::from_millis(2))).await;
             }
-            throttle = 1000;
+            throttle = 2000;
 
             let end = Instant::now().saturating_add(Duration::from_secs(3));
             while Instant::now() <= end {
@@ -113,16 +118,23 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
                 Timer::at(now.saturating_add(Duration::from_millis(2))).await;
             }
 
-            for throttle in (0..=1000).rev() {
+            for throttle in (0..=2000).rev() {
                 motors.send_throttles([throttle; 4]).await;
                 log::info!("throttle: {throttle}");
                 Timer::after(Duration::from_millis(2)).await;
             }
             throttle = 0;
+
+            let end = Instant::now().saturating_add(Duration::from_secs(1));
+            while Instant::now() <= end {
+                let now = Instant::now();
+                motors.send_throttles([throttle; 4]).await;
+                Timer::at(now.saturating_add(Duration::from_millis(2))).await;
+            }
         }
 
         let now = Instant::now();
         motors.send_throttles([throttle; 4]).await;
-        Timer::at(now.saturating_add(Duration::from_millis(2))).await;
+        Timer::at(now.saturating_add(Duration::from_micros(2))).await;
     }
 }

@@ -33,12 +33,21 @@ pub trait DShot: Protocol {
         assert!(value < 2048, "dshot max value is 2047");
 
         let telemetry_request = match telemetry_request {
-            true => 1 << 4,
+            true => 1,
             false => 0,
         };
-        let frame = value << 5 | telemetry_request;
-        let crc = (frame ^ (frame >> 4) ^ (frame >> 8)) & 0x0F;
-        let frame = (frame | crc).reverse_bits();
+        let data = value << 1 | telemetry_request;
+        let crc = (data ^ (data >> 4) ^ (data >> 8)) & 0xf;
+
+        let packet = (data << 4) | crc;
+        static mut LAST: u16 = u16::MAX;
+        unsafe {
+            if LAST != packet {
+                log::error!("{value}: {packet:016b} - {packet:04x}");
+                LAST = packet;
+            }
+        }
+        let frame = packet.reverse_bits();
 
         let mut pulse = [PulseCode::end_marker(); 17];
         for i in 0..16 {
@@ -56,7 +65,7 @@ pub trait DShot: Protocol {
     }
 
     fn throttle_transform(throttle: u16) -> u16 {
-        throttle.min(1999) + 48
+        throttle.clamp(1, 1999) + 48
     }
 }
 
@@ -317,13 +326,19 @@ impl<Proto: OneShot> Motors<Proto> {
 impl<Proto: DShot> Motors<Proto> {
     pub async fn arm_dshot(&mut self) {
         // Reset
-        let end = Instant::now().saturating_add(Duration::from_secs(1));
+        let end = Instant::now().saturating_add(Duration::from_millis(420));
         while Instant::now() <= end {
             self.send_esc_values([0; 4]).await;
         }
 
+        // Arm
+        let end = Instant::now().saturating_add(Duration::from_millis(420));
+        while Instant::now() <= end {
+            self.send_esc_values([48; 4]).await;
+        }
+
         // Zero Throttle
-        let end = Instant::now().saturating_add(Duration::from_secs(1));
+        let end = Instant::now().saturating_add(Duration::from_millis(420));
         while Instant::now() <= end {
             self.send_throttles([0; 4]).await;
         }
