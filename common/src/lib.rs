@@ -1,4 +1,11 @@
-enum RemoteRequestEvent {
+#![no_std]
+
+extern crate alloc;
+
+use alloc::string::String;
+
+#[derive(Debug, bincode::Encode, bincode::Decode)]
+pub enum RemoteRequest {
     Ping,
     PowerOn,
     PowerOff,
@@ -12,7 +19,8 @@ enum RemoteRequestEvent {
     },
 }
 
-enum QuadcopterResponseEvent {
+#[derive(Debug, bincode::Encode, bincode::Decode)]
+pub enum QuadcopterResponse {
     Pong,
     Log(String),
 }

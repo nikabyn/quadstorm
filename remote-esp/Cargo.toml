@@ -1,26 +1,28 @@
 [package]
-edition = "2024"
 name = "remote-esp"
-rust-version = "1.88"
 version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+
+[lib]
+bench = false
+doctest = false
+test = false
 
 [[bin]]
+bench = false
+doctest = false
 name = "remote-esp"
+path = "src/main.rs"
+test = false
 
 [dependencies]
-esp-hal = { version = "1.0.0", features = ["esp32c6", "log-04", "unstable"] }
-
-esp-rtos = { version = "0.2.0", features = [
-  "embassy",
-  "esp-alloc",
-  "esp-radio",
-  "esp32c6",
-  "log-04",
-] }
-
-esp-bootloader-esp-idf = { version = "0.4.0", features = ["esp32c6", "log-04"] }
-log = "0.4.27"
-
+bincode = { version = "2.0.1", default-features = false, features = ["alloc"] }
+common = { path = "../common" }
+critical-section = "1.2.0"
+# for more networking protocol support see https://crates.io/crates/edge-net
+embassy-executor = { version = "0.9.1", features = ["log"] }
+embassy-futures = "0.1.2"
 embassy-net = { version = "0.7.1", features = [
   "dhcpv4",
   "log",
@@ -28,6 +30,8 @@ embassy-net = { version = "0.7.1", features = [
   "tcp",
   "udp",
 ] }
+embassy-sync = "0.7.2"
+embassy-time = { version = "0.5.0", features = ["log"] }
 embedded-io = "0.7.1"
 embedded-io-async = "0.7.0"
 esp-alloc = "0.9.0"
@@ -36,19 +40,26 @@ esp-backtrace = { version = "0.18.1", features = [
   "panic-handler",
   "println",
 ] }
+esp-bootloader-esp-idf = { version = "0.4.0", features = ["esp32c6", "log-04"] }
+esp-hal = { version = "1.0.0", features = ["esp32c6", "log-04", "unstable"] }
 esp-println = { version = "0.16.1", features = ["esp32c6", "log-04"] }
-# for more networking protocol support see https://crates.io/crates/edge-net
-embassy-executor = { version = "0.9.1", features = ["log"] }
-embassy-time = { version = "0.5.0", features = ["log"] }
 esp-radio = { version = "0.17.0", features = [
   "esp-alloc",
+  "esp-now",
   "esp32c6",
   "log-04",
   "smoltcp",
   "unstable",
   "wifi",
-  "esp-now",
 ] }
+esp-rtos = { version = "0.2.0", features = [
+  "embassy",
+  "esp-alloc",
+  "esp-radio",
+  "esp32c6",
+  "log-04",
+] }
+log = "0.4.27"
 smoltcp = { version = "0.12.0", default-features = false, features = [
   "log",
   "medium-ethernet",
@@ -62,11 +73,7 @@ smoltcp = { version = "0.12.0", default-features = false, features = [
   "socket-tcp",
   "socket-udp",
 ] }
-
 static_cell = { version = "2.1.1" }
-critical-section = "1.2.0"
-embassy-futures = "0.1.2"
-embassy-sync = "0.7.2"
 
 [profile.dev]
 # Rust debug is too slow.
@@ -74,10 +81,11 @@ embassy-sync = "0.7.2"
 opt-level = "s"
 
 [profile.release]
-codegen-units = 1        # LLVM can perform better optimizations using a single thread
+opt-level = "s"
 debug = 2
 debug-assertions = false
-incremental = false
-lto = 'fat'
-opt-level = 's'
 overflow-checks = false
+lto = "fat"
+incremental = false
+# LLVM can perform better optimizations using a single thread
+codegen-units = 1
