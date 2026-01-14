@@ -14,12 +14,12 @@ use common::{QuadcopterResponse, RemoteRequest};
 use embassy_executor::Spawner;
 use embassy_sync::{
     blocking_mutex::raw::NoopRawMutex,
-    channel::{Channel, Sender},
+    channel::{Channel, Receiver, Sender},
 };
 use embassy_time::{Duration, Ticker};
-use esp_hal::clock::CpuClock;
 use esp_hal::interrupt::software::SoftwareInterruptControl;
 use esp_hal::timer::timg::TimerGroup;
+use esp_hal::{clock::CpuClock, peripherals::WIFI};
 use log::info;
 
 use remote_esp::{esp_now, make_static};
@@ -47,29 +47,30 @@ async fn main(spawner: Spawner) -> ! {
 
     let outgoing_events =
         make_static!(Channel<NoopRawMutex, RemoteRequest, EVENTS_CHANNEL_SIZE>, Channel::new());
-    let incoming_events = make_static!(Channel<NoopRawMutex, QuadcopterResponse, EVENTS_CHANNEL_SIZE>, Channel::new());
+    let incoming_events =
+        make_static!(Channel<NoopRawMutex, RemoteRequest, EVENTS_CHANNEL_SIZE>, Channel::new());
 
     spawner
-        .spawn(generate_events(outgoing_events.sender()))
+        .spawn(esp_now_communicate(
+            peripherals.WIFI,
+            outgoing_events.receiver(),
+            incoming_events.sender(),
+        ))
         .unwrap();
 
-    esp_now::communicate(
-        peripherals.WIFI,
-        outgoing_events.receiver(),
-        incoming_events.sender(),
-    )
-    .await;
-
-    loop {}
-}
-
-#[embassy_executor::task]
-async fn generate_events(events: Sender<'static, NoopRawMutex, RemoteRequest, 64>) {
     let mut ticker = Ticker::every(Duration::from_millis(2000));
-
     loop {
         ticker.next().await;
 
-        events.send(RemoteRequest::Ping).await;
+        outgoing_events.send(RemoteRequest::Ping).await;
     }
+}
+
+#[embassy_executor::task]
+async fn esp_now_communicate(
+    wifi: WIFI<'static>,
+    outgoing: Receiver<'static, NoopRawMutex, RemoteRequest, EVENTS_CHANNEL_SIZE>,
+    incoming: Sender<'static, NoopRawMutex, RemoteRequest, EVENTS_CHANNEL_SIZE>,
+) {
+    esp_now::communicate(wifi, outgoing, incoming).await
 }

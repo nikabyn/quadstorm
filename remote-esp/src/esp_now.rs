@@ -5,14 +5,11 @@ use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::channel::{Receiver, Sender};
 use embassy_time::{Duration, Ticker};
 use esp_hal::peripherals::WIFI;
-use esp_radio::Controller;
 use esp_radio::esp_now::{
     BROADCAST_ADDRESS, EspNowManager, EspNowReceiver, EspNowSender, EspNowWifiInterface, PeerInfo,
 };
 use esp_radio::wifi::WifiMode;
 use log::{error, info};
-
-use crate::make_static;
 
 pub async fn communicate<
     MsgOutgoing: bincode::Encode + Debug,
@@ -20,15 +17,14 @@ pub async fn communicate<
     MsgIncoming: bincode::Decode<()> + Debug,
     const INCOMING_CHANNEL_SIZE: usize,
 >(
-    wifi: WIFI<'static>,
-    outgoing: Receiver<'static, NoopRawMutex, MsgOutgoing, OUTGOING_CHANNEL_SIZE>,
-    incoming: Sender<'static, NoopRawMutex, MsgIncoming, INCOMING_CHANNEL_SIZE>,
+    wifi: WIFI<'_>,
+    outgoing: Receiver<'_, NoopRawMutex, MsgOutgoing, OUTGOING_CHANNEL_SIZE>,
+    incoming: Sender<'_, NoopRawMutex, MsgIncoming, INCOMING_CHANNEL_SIZE>,
 ) {
     let radio_init = esp_radio::init().expect("Failed to initialize Wi-Fi/BLE controller");
-    let radio_controller = make_static!(Controller, radio_init);
 
     let (mut wifi_controller, interfaces) =
-        esp_radio::wifi::new(radio_controller, wifi, Default::default())
+        esp_radio::wifi::new(&radio_init, wifi, Default::default())
             .expect("Failed to initialize Wi-Fi controller");
     wifi_controller.set_mode(WifiMode::Sta).unwrap();
     wifi_controller.start().unwrap();
@@ -48,8 +44,8 @@ pub async fn communicate<
 }
 
 async fn broadcast<Msg: bincode::Encode + Debug, const CHANNEL_SIZE: usize>(
-    mut sender: EspNowSender<'static>,
-    messages: Receiver<'static, NoopRawMutex, Msg, CHANNEL_SIZE>,
+    mut sender: EspNowSender<'_>,
+    messages: Receiver<'_, NoopRawMutex, Msg, CHANNEL_SIZE>,
 ) {
     loop {
         let message = messages.receive().await;
@@ -65,8 +61,8 @@ async fn broadcast<Msg: bincode::Encode + Debug, const CHANNEL_SIZE: usize>(
 
 async fn receive<Msg: bincode::Decode<()> + Debug, const CHANNEL_SIZE: usize>(
     manager: &EspNowManager<'_>,
-    mut receiver: EspNowReceiver<'static>,
-    messages: Sender<'static, NoopRawMutex, Msg, CHANNEL_SIZE>,
+    mut receiver: EspNowReceiver<'_>,
+    messages: Sender<'_, NoopRawMutex, Msg, CHANNEL_SIZE>,
 ) {
     loop {
         let received = receiver.receive_async().await;
