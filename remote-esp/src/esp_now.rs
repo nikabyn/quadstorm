@@ -3,7 +3,6 @@ use core::fmt::Debug;
 use embassy_futures::join::join3;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::channel::{Receiver, Sender};
-use embassy_sync::mutex::Mutex;
 use embassy_time::{Duration, Ticker};
 use esp_hal::peripherals::WIFI;
 use esp_radio::Controller;
@@ -26,7 +25,7 @@ pub async fn communicate<
     incoming: Sender<'static, NoopRawMutex, MsgIncoming, INCOMING_CHANNEL_SIZE>,
 ) {
     let radio_init = esp_radio::init().expect("Failed to initialize Wi-Fi/BLE controller");
-    let radio_controller = make_static!(Controller<'static>, radio_init);
+    let radio_controller = make_static!(Controller, radio_init);
 
     let (mut wifi_controller, interfaces) =
         esp_radio::wifi::new(radio_controller, wifi, Default::default())
@@ -40,28 +39,22 @@ pub async fn communicate<
     info!("esp-now version {}", esp_now.version().unwrap());
 
     let (manager, esp_now_sender, esp_now_receiver) = esp_now.split();
-    let manager = make_static!(EspNowManager<'static>, manager);
-    let esp_now_sender = make_static!(
-        Mutex::<NoopRawMutex, EspNowSender<'static>>,
-        Mutex::<NoopRawMutex, _>::new(esp_now_sender)
-    );
 
     let broadcast_fut = broadcast(esp_now_sender, outgoing);
-    let receive_fut = receive(manager, esp_now_receiver, incoming);
-    let fetch_peers_fut = fetch_peers(manager);
+    let receive_fut = receive(&manager, esp_now_receiver, incoming);
+    let fetch_peers_fut = fetch_peers(&manager);
 
     join3(broadcast_fut, receive_fut, fetch_peers_fut).await;
 }
 
 async fn broadcast<Msg: bincode::Encode + Debug, const CHANNEL_SIZE: usize>(
-    sender: &'static Mutex<NoopRawMutex, EspNowSender<'static>>,
+    mut sender: EspNowSender<'static>,
     messages: Receiver<'static, NoopRawMutex, Msg, CHANNEL_SIZE>,
 ) {
     loop {
         let message = messages.receive().await;
         let bytes = bincode::encode_to_vec(&message, bincode::config::standard()).unwrap();
 
-        let mut sender = sender.lock().await;
         let status = sender.send_async(&BROADCAST_ADDRESS, &bytes).await;
         match status {
             Ok(_) => info!("Sent {message:?}"),
@@ -71,7 +64,7 @@ async fn broadcast<Msg: bincode::Encode + Debug, const CHANNEL_SIZE: usize>(
 }
 
 async fn receive<Msg: bincode::Decode<()> + Debug, const CHANNEL_SIZE: usize>(
-    manager: &'static EspNowManager<'static>,
+    manager: &EspNowManager<'_>,
     mut receiver: EspNowReceiver<'static>,
     messages: Sender<'static, NoopRawMutex, Msg, CHANNEL_SIZE>,
 ) {
@@ -101,7 +94,7 @@ async fn receive<Msg: bincode::Decode<()> + Debug, const CHANNEL_SIZE: usize>(
     }
 }
 
-async fn fetch_peers(manager: &'static EspNowManager<'static>) {
+async fn fetch_peers(manager: &EspNowManager<'_>) {
     let mut ticker = Ticker::every(Duration::from_millis(500));
     loop {
         ticker.next().await;
