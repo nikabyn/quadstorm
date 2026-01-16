@@ -86,6 +86,7 @@ dependencies = [
  "esp-hal",
  "esp-radio",
  "log",
+ "static_cell",
  "wincode",
 ]
 
@@ -249,6 +250,7 @@ name = "drone"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "communication",
  "embassy-executor",
  "embassy-futures",
  "embassy-sync 0.7.2",

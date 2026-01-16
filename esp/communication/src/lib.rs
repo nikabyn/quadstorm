@@ -14,7 +14,7 @@ use esp_radio::esp_now::{
     BROADCAST_ADDRESS, EspNowManager, EspNowReceiver, EspNowSender, EspNowWifiInterface, PeerInfo,
 };
 use esp_radio::wifi::WifiMode;
-use log::{error, info};
+use log::{debug, error, info, trace};
 use wincode::{SchemaRead, SchemaReadOwned, SchemaWrite};
 
 #[derive(Debug, SchemaWrite, SchemaRead)]
@@ -80,7 +80,7 @@ async fn broadcast<Msg: SchemaWrite<Src = Msg> + Debug, const CHANNEL_SIZE: usiz
 
         let status = sender.send_async(&BROADCAST_ADDRESS, &bytes).await;
         match status {
-            Ok(_) => info!("Sent {message:?}"),
+            Ok(_) => debug!("Sent {message:?}"),
             Err(err) => error!("Error while sending: {err}"),
         }
     }
@@ -94,7 +94,7 @@ async fn receive<'a, Msg: SchemaReadOwned<Dst = Msg> + Debug, const CHANNEL_SIZE
     loop {
         let received = receiver.receive_async().await;
         let incoming_event = wincode::deserialize(received.data()).unwrap();
-        info!("Received {:?}", incoming_event);
+        debug!("Received {:?}", incoming_event);
 
         messages.send(incoming_event).await;
 
@@ -124,4 +124,23 @@ async fn fetch_peers(manager: &EspNowManager<'_>) {
             _ = manager.fetch_peer(true);
         }
     }
+}
+
+#[macro_export]
+macro_rules! static_channel {
+    ($t:ty, $size:expr) => {{
+        static STATIC_CELL: static_cell::ConstStaticCell<Channel<NoopRawMutex, $t, $size>> =
+            static_cell::ConstStaticCell::new(Channel::new());
+        static_cell::ConstStaticCell::take(&STATIC_CELL)
+    }};
+}
+
+#[macro_export]
+macro_rules! make_static {
+    ($t:ty, $val:expr) => {{
+        static STATIC_CELL: static_cell::StaticCell<$t> = static_cell::StaticCell::new();
+        #[deny(unused_attributes)]
+        let x = STATIC_CELL.uninit().write(($val));
+        x
+    }};
 }

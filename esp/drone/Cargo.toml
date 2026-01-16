@@ -24,6 +24,7 @@ test = false
 
 [dependencies]
 base64 = { workspace = true }
+communication = { path = "../communication" }
 embassy-executor = { workspace = true }
 embassy-futures = { workspace = true }
 embassy-sync = { workspace = true }
