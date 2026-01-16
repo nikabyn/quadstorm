@@ -10,7 +10,7 @@ extern crate alloc;
 use esp_alloc as _;
 use esp_backtrace as _;
 
-use common::{QuadcopterResponse, RemoteRequest};
+use communication::{QuadcopterResponse, RemoteRequest};
 use embassy_executor::Spawner;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::channel::{Channel, Receiver, Sender};
@@ -20,7 +20,15 @@ use esp_hal::timer::timg::TimerGroup;
 use esp_hal::{clock::CpuClock, peripherals::WIFI};
 use log::info;
 
-use remote_esp::{esp_now, make_static};
+#[macro_export]
+macro_rules! make_static {
+    ($t:ty, $val:expr) => {{
+        static STATIC_CELL: static_cell::StaticCell<$t> = static_cell::StaticCell::new();
+        #[deny(unused_attributes)]
+        let x = STATIC_CELL.uninit().write(($val));
+        x
+    }};
+}
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
@@ -70,5 +78,5 @@ async fn esp_now_communicate(
     outgoing: Receiver<'static, NoopRawMutex, RemoteRequest, EVENTS_CHANNEL_SIZE>,
     incoming: Sender<'static, NoopRawMutex, RemoteRequest, EVENTS_CHANNEL_SIZE>,
 ) {
-    esp_now::communicate(wifi, outgoing, incoming).await
+    communication::communicate(wifi, outgoing, incoming).await
 }

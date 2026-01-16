@@ -1,11 +1,5 @@
 #![no_std]
-#![deny(
-    clippy::mem_forget,
-    reason = "mem::forget is generally not safe to do with esp_hal types, especially those \
-    holding buffers for the duration of a data transfer."
-)]
-
-pub mod esp_now;
+pub mod esp_ikarus;
 
 #[macro_export]
 macro_rules! make_static {

@@ -1,3 +1,8 @@
+#![no_std]
+
+extern crate alloc;
+
+use alloc::string::String;
 use core::fmt::Debug;
 
 use embassy_futures::join::join3;
@@ -10,11 +15,33 @@ use esp_radio::esp_now::{
 };
 use esp_radio::wifi::WifiMode;
 use log::{error, info};
+use wincode::{SchemaRead, SchemaReadOwned, SchemaWrite};
+
+#[derive(Debug, SchemaWrite, SchemaRead)]
+pub enum RemoteRequest {
+    Ping,
+    PowerOn,
+    PowerOff,
+    Move {
+        /// left (-1) to right (+1)
+        x: f32,
+        /// backwards (-1) to forwards (+1)
+        y: f32,
+        /// down (-1) to up (+1)
+        z: f32,
+    },
+}
+
+#[derive(Debug, SchemaWrite, SchemaRead)]
+pub enum QuadcopterResponse {
+    Pong,
+    Log(String),
+}
 
 pub async fn communicate<
-    MsgOutgoing: bincode::Encode + Debug,
+    MsgOutgoing: SchemaWrite<Src = MsgOutgoing> + Debug,
     const OUTGOING_CHANNEL_SIZE: usize,
-    MsgIncoming: bincode::Decode<()> + Debug,
+    MsgIncoming: SchemaReadOwned<Dst = MsgIncoming> + Debug,
     const INCOMING_CHANNEL_SIZE: usize,
 >(
     wifi: WIFI<'_>,
@@ -43,13 +70,13 @@ pub async fn communicate<
     join3(broadcast_fut, receive_fut, fetch_peers_fut).await;
 }
 
-async fn broadcast<Msg: bincode::Encode + Debug, const CHANNEL_SIZE: usize>(
+async fn broadcast<Msg: SchemaWrite<Src = Msg> + Debug, const CHANNEL_SIZE: usize>(
     mut sender: EspNowSender<'_>,
     messages: Receiver<'_, NoopRawMutex, Msg, CHANNEL_SIZE>,
 ) {
     loop {
         let message = messages.receive().await;
-        let bytes = bincode::encode_to_vec(&message, bincode::config::standard()).unwrap();
+        let bytes = wincode::serialize(&message).unwrap();
 
         let status = sender.send_async(&BROADCAST_ADDRESS, &bytes).await;
         match status {
@@ -59,16 +86,14 @@ async fn broadcast<Msg: bincode::Encode + Debug, const CHANNEL_SIZE: usize>(
     }
 }
 
-async fn receive<Msg: bincode::Decode<()> + Debug, const CHANNEL_SIZE: usize>(
+async fn receive<'a, Msg: SchemaReadOwned<Dst = Msg> + Debug, const CHANNEL_SIZE: usize>(
     manager: &EspNowManager<'_>,
     mut receiver: EspNowReceiver<'_>,
     messages: Sender<'_, NoopRawMutex, Msg, CHANNEL_SIZE>,
 ) {
     loop {
         let received = receiver.receive_async().await;
-        let (incoming_event, _) =
-            bincode::decode_from_slice::<Msg, _>(received.data(), bincode::config::standard())
-                .unwrap();
+        let incoming_event = wincode::deserialize(received.data()).unwrap();
         info!("Received {:?}", incoming_event);
 
         messages.send(incoming_event).await;

@@ -1,0 +1,18 @@
+[package]
+name = "communication"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+
+[lib]
+bench = false
+test = false
+
+[dependencies]
+embassy-futures = { workspace = true }
+embassy-sync = { workspace = true }
+embassy-time = { workspace = true }
+esp-hal = { workspace = true }
+esp-radio = { workspace = true }
+log = { workspace = true }
+wincode = { workspace = true }

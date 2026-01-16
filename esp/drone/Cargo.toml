@@ -1,0 +1,40 @@
+[package]
+name = "drone"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+default-run = "drone"
+
+[lib]
+bench = false
+path = "./src/lib.rs"
+test = false
+
+[[bin]]
+bench = false
+name = "drone"
+path = "./src/main.rs"
+test = false
+
+[[bin]]
+bench = false
+name = "esp-ikarus"
+path = "./src/esp_ikarus/main.rs"
+test = false
+
+[dependencies]
+base64 = { workspace = true }
+embassy-executor = { workspace = true }
+embassy-futures = { workspace = true }
+embassy-sync = { workspace = true }
+embassy-time = { workspace = true }
+esp-alloc = { workspace = true }
+esp-backtrace = { workspace = true }
+esp-bootloader-esp-idf = { workspace = true }
+esp-hal = { workspace = true, features = ["unstable"] }
+esp-println = { workspace = true }
+esp-radio = { workspace = true }
+esp-rtos = { workspace = true }
+log = { workspace = true }
+static_cell = { workspace = true }
+thiserror = { workspace = true }

@@ -1,45 +1,30 @@
-[package]
-name = "drone"
-version = "0.1.0"
+[workspace]
+resolver = "3"
+members = ["communication", "drone", "remote"]
+default-members = []
+
+[workspace.package]
 edition = "2024"
 rust-version = "1.88"
-default-run = "drone"
 
-[lib]
-bench = false
-path = "./src/lib.rs"
-test = false
-
-[[bin]]
-bench = false
-name = "drone"
-path = "./src/main.rs"
-test = false
-
-[[bin]]
-bench = false
-name = "esp-ikarus"
-path = "./src/esp_ikarus/main.rs"
-test = false
-
-[dependencies]
+[workspace.dependencies]
 base64 = { version = "0.22.1", default-features = false }
 embassy-executor = { version = "0.9.1", features = ["log"] }
-embassy-futures = { version = "0.1.2", features = ["log"] }
-embassy-net = { version = "0.8.0", features = [
-  "log",
-  "medium-ethernet",
-  "proto-ipv4"
-] }
-embassy-sync = { version = "0.7.2", features = ["log"] }
+embassy-futures = "0.1.2"
+embassy-sync = "0.7.2"
 embassy-time = { version = "0.5.0", features = ["log"] }
 esp-alloc = "0.9.0"
-esp-backtrace = { version = "0.18.1", features = ["esp32c6", "println"] }
+esp-backtrace = { version = "0.18.1", features = [
+  "esp32c6",
+  "panic-handler",
+  "println",
+] }
 esp-bootloader-esp-idf = { version = "0.4.0", features = ["esp32c6", "log-04"] }
 esp-hal = { version = "1.0.0", features = ["esp32c6", "log-04", "unstable"] }
 esp-println = { version = "0.16.1", features = ["esp32c6", "log-04"] }
 esp-radio = { version = "0.17.0", features = [
   "esp-alloc",
+  "esp-now",
   "esp32c6",
   "log-04",
   "unstable",
@@ -52,12 +37,13 @@ esp-rtos = { version = "0.2.0", features = [
   "esp32c6",
   "log-04",
 ] }
-log = "0.4.29"
-smoltcp = { version = "0.12.0", default-features = false, features = [
-  "log",
-  "socket-raw",
-] }
+log = "0.4.27"
+static_cell = { version = "2.1.1" }
 thiserror = { version = "2.0.17", default-features = false }
+wincode = { version = "0.2.5", default-features = false, features = [
+  "alloc",
+  "derive"
+] }
 
 [profile.dev]
 # Rust debug is too slow.
@@ -71,4 +57,5 @@ debug-assertions = false
 overflow-checks = false
 lto = "fat"
 incremental = false
-codegen-units = 1  # LLVM can perform better optimizations using a single thread
+# LLVM can perform better optimizations using a single thread
+codegen-units = 1
