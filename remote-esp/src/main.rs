@@ -12,10 +12,8 @@ use esp_backtrace as _;
 
 use common::{QuadcopterResponse, RemoteRequest};
 use embassy_executor::Spawner;
-use embassy_sync::{
-    blocking_mutex::raw::NoopRawMutex,
-    channel::{Channel, Receiver, Sender},
-};
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+use embassy_sync::channel::{Channel, Receiver, Sender};
 use embassy_time::{Duration, Ticker};
 use esp_hal::interrupt::software::SoftwareInterruptControl;
 use esp_hal::timer::timg::TimerGroup;
