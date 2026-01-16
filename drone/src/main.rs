@@ -11,7 +11,6 @@ use embassy_time::{Duration, Timer};
 use esp_hal::clock::CpuClock;
 use esp_hal::timer::timg::TimerGroup;
 use esp_hal::{i2c::master, time::Rate};
-use esp_hal::i2c::master::BusTimeout;
 use esp_println::println;
 use log::info;
 
@@ -22,9 +21,6 @@ fn panic(_: &core::panic::PanicInfo) -> ! {
 
 extern crate alloc;
 
-const CONNECTIONS_MAX: usize = 1;
-const L2CAP_CHANNELS_MAX: usize = 1;
-
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
 esp_bootloader_esp_idf::esp_app_desc!();
@@ -32,19 +28,23 @@ esp_bootloader_esp_idf::esp_app_desc!();
 const SENSOR_ADDR: u8 = 0x6B;
 
 #[esp_rtos::main]
-async fn main(spawner: Spawner) -> ! {
-
+async fn main(_spawner: Spawner) -> ! {
     esp_println::logger::init_logger_from_env();
 
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
 
     let c = master::Config::default().with_frequency(Rate::from_khz(100));
-    let mut i2c = master::I2c::new(peripherals.I2C0, c).unwrap()
-        .with_sda(peripherals.GPIO4).with_scl(peripherals.GPIO5);
+    let mut i2c = master::I2c::new(peripherals.I2C0, c)
+        .unwrap()
+        .with_sda(peripherals.GPIO4)
+        .with_scl(peripherals.GPIO5);
 
     let mut read_buffer = [0u8];
-    if i2c.write_read(SENSOR_ADDR, &[0x0F], &mut read_buffer).is_ok() {
+    if i2c
+        .write_read(SENSOR_ADDR, &[0x0F], &mut read_buffer)
+        .is_ok()
+    {
         info!("READ buffer: {:X?}", read_buffer);
     }
 
@@ -62,7 +62,7 @@ async fn main(spawner: Spawner) -> ! {
     esp_rtos::start(timg0.timer0, sw_interrupt.software_interrupt0);
 
     info!("Embassy initialized!");
-    let comp = get_comp_values ({
+    let comp = get_comp_values({
         let mut data = [0u8; 12];
         let mut comp_data = [[0i16; 6]; 400];
         for i in 0..400 {
@@ -103,14 +103,16 @@ async fn main(spawner: Spawner) -> ! {
 fn process_imu_data(data: [u8; 12]) -> [i16; 6] {
     let mut res = [0i16; 6];
     for i in 0..6 {
-        res[i] = i16::from_le_bytes([data[i*2], data[i*2+1]]);
+        res[i] = i16::from_le_bytes([data[i * 2], data[i * 2 + 1]]);
     }
     res
 }
 
 fn get_comp_values(data: [[i16; 6]; 400]) -> [i16; 6] {
     let sums = data.iter().fold([0i64; 6], |mut acc, elem| {
-        for i in 0..6 { acc[i] += elem[i] as i64; }
+        for i in 0..6 {
+            acc[i] += elem[i] as i64;
+        }
         acc
     });
     sums.map(|x| (x / 400) as i16)

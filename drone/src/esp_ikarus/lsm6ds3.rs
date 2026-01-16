@@ -161,7 +161,7 @@ async fn read_imu_task(
                 None
             };
 
-            let (end, lag) = futures::join!(read_queue, lag);
+            let (end, lag) = embassy_futures::join::join(read_queue, lag).await;
 
             let end = match end {
                 Ok(end) => end,
