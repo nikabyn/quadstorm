@@ -88,7 +88,7 @@ async fn broadcast<Msg: SchemaWrite<Src = Msg> + Debug>(
     }
 }
 
-async fn receive<'a, Msg: SchemaReadOwned<Dst = Msg> + Debug>(
+async fn receive<Msg: SchemaReadOwned<Dst = Msg> + Debug>(
     manager: &EspNowManager<'_>,
     mut receiver: EspNowReceiver<'_>,
     mut messages: Sender<'_, NoopRawMutex, Msg>,
@@ -101,19 +101,19 @@ async fn receive<'a, Msg: SchemaReadOwned<Dst = Msg> + Debug>(
         *messages.send().await = incoming_event;
         messages.send_done();
 
-        if received.info.dst_address == BROADCAST_ADDRESS {
-            if !manager.peer_exists(&received.info.src_address) {
-                manager
-                    .add_peer(PeerInfo {
-                        interface: EspNowWifiInterface::Sta,
-                        peer_address: received.info.src_address,
-                        lmk: None,
-                        channel: None,
-                        encrypt: false,
-                    })
-                    .unwrap();
-                info!("Added peer {:?}", received.info.src_address);
-            }
+        if received.info.dst_address == BROADCAST_ADDRESS
+            && !manager.peer_exists(&received.info.src_address)
+        {
+            manager
+                .add_peer(PeerInfo {
+                    interface: EspNowWifiInterface::Sta,
+                    peer_address: received.info.src_address,
+                    lmk: None,
+                    channel: None,
+                    encrypt: false,
+                })
+                .unwrap();
+            info!("Added peer {:?}", received.info.src_address);
         }
     }
 }
@@ -133,21 +133,14 @@ async fn fetch_peers(manager: &EspNowManager<'_>) {
 macro_rules! spsc_channel {
     ($t:ty, $size:expr) => {{
         use core::mem::MaybeUninit;
+        use embassy_sync::blocking_mutex::raw::NoopRawMutex;
         use embassy_sync::zerocopy_channel::Channel;
         use static_cell::StaticCell;
+
         static mut DATA: MaybeUninit<[$t; $size]> = MaybeUninit::uninit();
         static STATIC_CELL: StaticCell<Channel<NoopRawMutex, $t>> = StaticCell::new();
-        #[allow(static_mut_refs)]
-        STATIC_CELL.init(Channel::new(unsafe { DATA.assume_init_mut() }))
-    }};
-}
 
-#[macro_export]
-macro_rules! make_static {
-    ($t:ty, $val:expr) => {{
-        static STATIC_CELL: static_cell::StaticCell<$t> = static_cell::StaticCell::new();
-        #[deny(unused_attributes)]
-        let x = STATIC_CELL.uninit().write(($val));
-        x
+        #[allow(static_mut_refs)]
+        STATIC_CELL.init_with(|| Channel::new(unsafe { DATA.assume_init_mut() }))
     }};
 }

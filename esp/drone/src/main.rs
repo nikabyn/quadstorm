@@ -33,52 +33,57 @@ async fn main(spawner: Spawner) -> ! {
     init_rtos(peripherals.TIMG0, peripherals.SW_INTERRUPT).await;
     info!("Embassy initialized!");
 
-    info!("IMU init..");
-    let poci = peripherals.GPIO0;
-    let imu_cs = peripherals.GPIO1;
-    let pico = peripherals.GPIO2;
-    let sck = peripherals.GPIO3;
-    let imu_int1 = peripherals.GPIO14;
-    let imu_spi = peripherals.SPI2;
-    let imu_dma = peripherals.DMA_CH0;
+    // Initialize connection to remote controller
+    let (mut remote_reqests, mut drone_responses) = {
+        let (drone_tx, drone_rx) = spsc_channel!(DroneResponse, EVENTS_CHANNEL_SIZE).split();
+        let (remote_tx, remote_rx) = spsc_channel!(RemoteRequest, EVENTS_CHANNEL_SIZE).split();
+        spawner.must_spawn(esp_now_communicate(peripherals.WIFI, drone_rx, remote_tx));
 
-    let mut imu = bmi323::BMI323::new(imu_spi, sck, pico, poci, imu_dma, imu_cs, imu_int1);
-    imu.configure().await.unwrap();
-    info!("IMU ready");
+        (remote_rx, drone_tx)
+    };
 
-    let (mut outgoing_events_tx, outgoing_events_rx) =
-        spsc_channel!(DroneResponse, EVENTS_CHANNEL_SIZE).split();
-    let (incoming_events_tx, mut incoming_events_rx) =
-        spsc_channel!(RemoteRequest, EVENTS_CHANNEL_SIZE).split();
-    spawner.must_spawn(esp_now_communicate(
-        peripherals.WIFI,
-        outgoing_events_rx,
-        incoming_events_tx,
-    ));
+    let mut imu_data = {
+        info!("IMU init...");
 
-    let (imu_data_tx, mut imu_data_rx) = spsc_channel!(bmi323::Sample, 2048).split();
-    spawner.must_spawn(bmi323::read_imu(imu, imu_data_tx));
+        let poci = peripherals.GPIO0;
+        let imu_cs = peripherals.GPIO1;
+        let pico = peripherals.GPIO2;
+        let sck = peripherals.GPIO3;
+        let imu_int1 = peripherals.GPIO14;
+        let imu_spi = peripherals.SPI2;
+        let imu_dma = peripherals.DMA_CH0;
+
+        let mut imu = bmi323::BMI323::new(imu_spi, sck, pico, poci, imu_dma, imu_cs, imu_int1);
+        imu.configure().await.unwrap();
+
+        info!("IMU initialized!");
+
+        let (imu_data_tx, imu_data_rx) = spsc_channel!(bmi323::Sample, 2048).split();
+        spawner.must_spawn(bmi323::read_imu(imu, imu_data_tx));
+
+        imu_data_rx
+    };
 
     loop {
-        if let Some(remote_req) = incoming_events_rx.try_receive() {
+        if let Some(remote_req) = remote_reqests.try_receive() {
             match remote_req {
                 RemoteRequest::Ping => {
-                    *outgoing_events_tx.send().await = DroneResponse::Pong;
-                    outgoing_events_tx.send_done();
+                    *drone_responses.send().await = DroneResponse::Pong;
+                    drone_responses.send_done();
                 }
-                _ => {}
+                _ => todo!(),
             }
-            incoming_events_rx.receive_done();
+            remote_reqests.receive_done();
         }
 
-        if let Some(imu_sample) = imu_data_rx.try_receive() {
+        if let Some(imu_sample) = imu_data.try_receive() {
             let formatted = format!(
                 "gyro={:?}, accl={:?}, time={}",
                 imu_sample.gyro, imu_sample.accl, imu_sample.time
             );
-            *outgoing_events_tx.send().await = DroneResponse::Log(formatted);
-            imu_data_rx.receive_done();
-            outgoing_events_tx.send_done();
+            *drone_responses.send().await = DroneResponse::Log(formatted);
+            imu_data.receive_done();
+            drone_responses.send_done();
         }
 
         embassy_futures::yield_now().await;
