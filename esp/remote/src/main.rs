@@ -26,61 +26,51 @@ use communication::{DroneResponse, RemoteRequest, spsc_channel};
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
 esp_bootloader_esp_idf::esp_app_desc!();
 
-const EVENTS_CHANNEL_SIZE: usize = 64;
-
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
     let peripherals = init_esp().await;
     init_rtos(peripherals.TIMG0, peripherals.SW_INTERRUPT).await;
-
     info!("Embassy initialized!");
 
-    let (mut outgoing_events_tx, outgoing_events_rx) =
-        spsc_channel!(RemoteRequest, EVENTS_CHANNEL_SIZE).split();
-    let (incoming_events_tx, mut incoming_events_rx) =
-        spsc_channel!(DroneResponse, EVENTS_CHANNEL_SIZE).split();
-    spawner
-        .spawn(esp_now_communicate(
-            peripherals.WIFI,
-            outgoing_events_rx,
-            incoming_events_tx,
-        ))
-        .unwrap();
+    let (mut drone_responses, mut remote_requests) = {
+        let (remote_tx, remote_rx) = spsc_channel!(RemoteRequest, 64).split();
+        let (drone_tx, drone_rx) = spsc_channel!(DroneResponse, 64).split();
+        spawner.must_spawn(esp_now_communicate(peripherals.WIFI, remote_rx, drone_tx));
+        (drone_rx, remote_tx)
+    };
 
     let mut ticker = Ticker::every(Duration::from_millis(2000));
     let mut last_ping_sent = None;
     loop {
-        let result = select(ticker.next(), incoming_events_rx.receive()).await;
-        match result {
-            Either::First(_) => {
-                if last_ping_sent.replace(Instant::now()).is_some() {
-                    warn!("Connection lost!");
-                }
-                *outgoing_events_tx.send().await = RemoteRequest::Ping;
-                outgoing_events_tx.send_done();
-            }
-            Either::Second(drone_res) => {
-                match drone_res {
-                    DroneResponse::Pong => {
-                        let Some(roundtrip_start) = last_ping_sent.take() else {
-                            continue;
-                        };
-                        info!(
-                            "Roundtrip time: {}ms",
-                            roundtrip_start.elapsed().as_millis()
-                        );
-                    }
-                    DroneResponse::Log(content) => {
-                        info!("Log: {content}");
-                    }
-                    _ => {
-                        error!("Unexpected response: {drone_res:?}");
-                    }
-                }
+        let result = select(ticker.next(), drone_responses.receive()).await;
 
-                incoming_events_rx.receive_done();
+        let Either::Second(drone_res) = result else {
+            if last_ping_sent.replace(Instant::now()).is_some() {
+                warn!("Connection lost!");
+            }
+            *remote_requests.send().await = RemoteRequest::Ping;
+            remote_requests.send_done();
+            continue;
+        };
+
+        match drone_res {
+            DroneResponse::Pong => {
+                if let Some(roundtrip_start) = last_ping_sent.take() {
+                    info!(
+                        "Roundtrip time: {}ms",
+                        roundtrip_start.elapsed().as_millis()
+                    );
+                }
+            }
+            DroneResponse::Log(content) => {
+                info!("Log: {content}");
+            }
+            _ => {
+                error!("Unexpected response: {drone_res:?}");
             }
         }
+
+        drone_responses.receive_done();
     }
 }
 

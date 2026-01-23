@@ -25,8 +25,6 @@ use communication::{DroneResponse, RemoteRequest, spsc_channel};
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
 esp_bootloader_esp_idf::esp_app_desc!();
 
-const EVENTS_CHANNEL_SIZE: usize = 64;
-
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
     let peripherals = init_esp().await;
@@ -35,8 +33,8 @@ async fn main(spawner: Spawner) -> ! {
 
     // Initialize connection to remote controller
     let (mut remote_reqests, mut drone_responses) = {
-        let (drone_tx, drone_rx) = spsc_channel!(DroneResponse, EVENTS_CHANNEL_SIZE).split();
-        let (remote_tx, remote_rx) = spsc_channel!(RemoteRequest, EVENTS_CHANNEL_SIZE).split();
+        let (drone_tx, drone_rx) = spsc_channel!(DroneResponse, 64).split();
+        let (remote_tx, remote_rx) = spsc_channel!(RemoteRequest, 64).split();
         spawner.must_spawn(esp_now_communicate(peripherals.WIFI, drone_rx, remote_tx));
 
         (remote_rx, drone_tx)
