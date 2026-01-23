@@ -77,8 +77,8 @@ pub struct BMI323 {
 
 #[derive(Debug, Clone, Copy)]
 pub struct Sample {
-    pub gy: [f32; 3],
-    pub xl: [f32; 3],
+    pub gyro: [f32; 3],
+    pub accl: [f32; 3],
     pub time: u16,
 }
 
@@ -90,7 +90,7 @@ pub struct FifoStatus {
 }
 
 #[embassy_executor::task]
-async fn read_imu_task(
+pub async fn read_imu(
     mut imu: BMI323,
     mut tx: embassy_sync::zerocopy_channel::Sender<'static, NoopRawMutex, Sample>,
 ) {
@@ -133,8 +133,8 @@ async fn read_imu_task(
                 let time = u16::from_le_bytes(time);
 
                 let sample = Sample {
-                    gy: [rx, ry, rz],
-                    xl: [ax, ay, az],
+                    gyro: [rx, ry, rz],
+                    accl: [ax, ay, az],
                     time,
                 };
 
@@ -507,7 +507,7 @@ impl BMI323 {
         SpawnToken<impl Sized>,
     ) {
         let (tx, rx) = channel.split();
-        (rx, read_imu_task(self, tx))
+        (rx, read_imu(self, tx))
     }
 
     pub async fn fifo_status(&mut self) -> Result<FifoStatus, esp_hal::spi::Error> {

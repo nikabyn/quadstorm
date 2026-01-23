@@ -83,12 +83,12 @@ async fn imu_consumer(
         let sample = *rx.receive().await;
         rx.receive_done();
 
-        let bmi323::Sample { gy, xl, time } = sample;
+        let bmi323::Sample { gyro, accl, time } = sample;
 
         let mut sample_bytes = [0; { (4 * 3 * 2) + 2 }];
-        gy.into_iter()
+        gyro.into_iter()
             .flat_map(f32::to_le_bytes)
-            .chain(xl.into_iter().flat_map(f32::to_le_bytes))
+            .chain(accl.into_iter().flat_map(f32::to_le_bytes))
             .chain(time.to_le_bytes().into_iter())
             .zip(sample_bytes.iter_mut())
             .for_each(|(a, b)| *b = a);

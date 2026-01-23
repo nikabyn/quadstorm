@@ -13,14 +13,14 @@ use esp_backtrace as _;
 
 use embassy_executor::Spawner;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
-use embassy_sync::channel::{Channel, Receiver, Sender};
+use embassy_sync::zerocopy_channel::{Receiver, Sender};
 use embassy_time::{Duration, Instant, Ticker};
 use esp_hal::peripherals::{Peripherals, SW_INTERRUPT, TIMG0};
 use esp_hal::timer::timg::TimerGroup;
 use esp_hal::{clock::CpuClock, peripherals::WIFI};
 use log::{error, info, warn};
 
-use communication::{QuadcopterResponse, RemoteRequest, static_channel};
+use communication::{DroneResponse, RemoteRequest, spsc_channel};
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
@@ -35,38 +35,50 @@ async fn main(spawner: Spawner) -> ! {
 
     info!("Embassy initialized!");
 
-    let outgoing_events = static_channel!(RemoteRequest, EVENTS_CHANNEL_SIZE);
-    let incoming_events = static_channel!(QuadcopterResponse, EVENTS_CHANNEL_SIZE);
+    let (mut outgoing_events_tx, outgoing_events_rx) =
+        spsc_channel!(RemoteRequest, EVENTS_CHANNEL_SIZE).split();
+    let (incoming_events_tx, mut incoming_events_rx) =
+        spsc_channel!(DroneResponse, EVENTS_CHANNEL_SIZE).split();
     spawner
         .spawn(esp_now_communicate(
             peripherals.WIFI,
-            outgoing_events.receiver(),
-            incoming_events.sender(),
+            outgoing_events_rx,
+            incoming_events_tx,
         ))
         .unwrap();
 
     let mut ticker = Ticker::every(Duration::from_millis(2000));
     let mut last_ping_sent = None;
     loop {
-        let result = select(ticker.next(), incoming_events.receive()).await;
+        let result = select(ticker.next(), incoming_events_rx.receive()).await;
         match result {
             Either::First(_) => {
                 if last_ping_sent.replace(Instant::now()).is_some() {
                     warn!("Connection lost!");
                 }
-                outgoing_events.send(RemoteRequest::Ping).await;
-            }
-            Either::Second(QuadcopterResponse::Pong) => {
-                let Some(roundtrip_start) = last_ping_sent.take() else {
-                    continue;
-                };
-                info!(
-                    "Roundtrip time: {}ms",
-                    roundtrip_start.elapsed().as_millis()
-                );
+                *outgoing_events_tx.send().await = RemoteRequest::Ping;
+                outgoing_events_tx.send_done();
             }
             Either::Second(drone_res) => {
-                error!("Unexpected response: {drone_res:?}");
+                match drone_res {
+                    DroneResponse::Pong => {
+                        let Some(roundtrip_start) = last_ping_sent.take() else {
+                            continue;
+                        };
+                        info!(
+                            "Roundtrip time: {}ms",
+                            roundtrip_start.elapsed().as_millis()
+                        );
+                    }
+                    DroneResponse::Log(content) => {
+                        info!("Log: {content}");
+                    }
+                    _ => {
+                        error!("Unexpected response: {drone_res:?}");
+                    }
+                }
+
+                incoming_events_rx.receive_done();
             }
         }
     }
@@ -75,8 +87,8 @@ async fn main(spawner: Spawner) -> ! {
 #[embassy_executor::task]
 async fn esp_now_communicate(
     wifi: WIFI<'static>,
-    outgoing: Receiver<'static, NoopRawMutex, RemoteRequest, EVENTS_CHANNEL_SIZE>,
-    incoming: Sender<'static, NoopRawMutex, QuadcopterResponse, EVENTS_CHANNEL_SIZE>,
+    outgoing: Receiver<'static, NoopRawMutex, RemoteRequest>,
+    incoming: Sender<'static, NoopRawMutex, DroneResponse>,
 ) {
     communication::communicate(wifi, outgoing, incoming).await
 }

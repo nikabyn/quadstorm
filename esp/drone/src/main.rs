@@ -8,26 +8,23 @@
 
 extern crate alloc;
 
+use alloc::format;
+use drone::esp_ikarus::bmi323;
 use embassy_executor::Spawner;
-use embassy_futures::select::select;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
-use embassy_sync::channel::{Channel, Receiver, Sender};
-use embassy_time::{Duration, Instant, Ticker, Timer};
+use embassy_sync::zerocopy_channel::{Receiver, Sender};
 use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
-use esp_hal::peripherals::{GPIO4, GPIO5, I2C0, Peripherals, SW_INTERRUPT, TIMG0, WIFI};
+use esp_hal::peripherals::{Peripherals, SW_INTERRUPT, TIMG0, WIFI};
 use esp_hal::timer::timg::TimerGroup;
-use esp_hal::{i2c::master, time::Rate};
-use esp_println::println;
 use log::info;
 
-use communication::{QuadcopterResponse, RemoteRequest, static_channel};
+use communication::{DroneResponse, RemoteRequest, spsc_channel};
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
 esp_bootloader_esp_idf::esp_app_desc!();
 
-const SENSOR_ADDR: u8 = 0x6B;
 const EVENTS_CHANNEL_SIZE: usize = 64;
 
 #[esp_rtos::main]
@@ -36,119 +33,65 @@ async fn main(spawner: Spawner) -> ! {
     init_rtos(peripherals.TIMG0, peripherals.SW_INTERRUPT).await;
     info!("Embassy initialized!");
 
-    let outgoing_events = static_channel!(QuadcopterResponse, EVENTS_CHANNEL_SIZE);
-    let incoming_events = static_channel!(RemoteRequest, EVENTS_CHANNEL_SIZE);
-    spawner
-        .spawn(esp_now_communicate(
-            peripherals.WIFI,
-            outgoing_events.receiver(),
-            incoming_events.sender(),
-        ))
-        .unwrap();
+    info!("IMU init..");
+    let poci = peripherals.GPIO0;
+    let imu_cs = peripherals.GPIO1;
+    let pico = peripherals.GPIO2;
+    let sck = peripherals.GPIO3;
+    let imu_int1 = peripherals.GPIO14;
+    let imu_spi = peripherals.SPI2;
+    let imu_dma = peripherals.DMA_CH0;
 
-    // spawner
-    //     .spawn(imu(peripherals.I2C0, peripherals.GPIO4, peripherals.GPIO5))
-    //     .unwrap();
+    let mut imu = bmi323::BMI323::new(imu_spi, sck, pico, poci, imu_dma, imu_cs, imu_int1);
+    imu.configure().await.unwrap();
+    info!("IMU ready");
+
+    let (mut outgoing_events_tx, outgoing_events_rx) =
+        spsc_channel!(DroneResponse, EVENTS_CHANNEL_SIZE).split();
+    let (incoming_events_tx, mut incoming_events_rx) =
+        spsc_channel!(RemoteRequest, EVENTS_CHANNEL_SIZE).split();
+    spawner.must_spawn(esp_now_communicate(
+        peripherals.WIFI,
+        outgoing_events_rx,
+        incoming_events_tx,
+    ));
+
+    let (imu_data_tx, mut imu_data_rx) = spsc_channel!(bmi323::Sample, 2048).split();
+    spawner.must_spawn(bmi323::read_imu(imu, imu_data_tx));
 
     loop {
-        let remote_req = incoming_events.receive().await;
-        match remote_req {
-            RemoteRequest::Ping => {
-                outgoing_events.send(QuadcopterResponse::Pong).await;
+        if let Some(remote_req) = incoming_events_rx.try_receive() {
+            match remote_req {
+                RemoteRequest::Ping => {
+                    *outgoing_events_tx.send().await = DroneResponse::Pong;
+                    outgoing_events_tx.send_done();
+                }
+                _ => {}
             }
-            _ => {}
+            incoming_events_rx.receive_done();
         }
+
+        if let Some(imu_sample) = imu_data_rx.try_receive() {
+            let formatted = format!(
+                "gyro={:?}, accl={:?}, time={}",
+                imu_sample.gyro, imu_sample.accl, imu_sample.time
+            );
+            *outgoing_events_tx.send().await = DroneResponse::Log(formatted);
+            imu_data_rx.receive_done();
+            outgoing_events_tx.send_done();
+        }
+
+        embassy_futures::yield_now().await;
     }
 }
 
 #[embassy_executor::task]
 async fn esp_now_communicate(
     wifi: WIFI<'static>,
-    outgoing: Receiver<'static, NoopRawMutex, QuadcopterResponse, EVENTS_CHANNEL_SIZE>,
-    incoming: Sender<'static, NoopRawMutex, RemoteRequest, EVENTS_CHANNEL_SIZE>,
+    outgoing: Receiver<'static, NoopRawMutex, DroneResponse>,
+    incoming: Sender<'static, NoopRawMutex, RemoteRequest>,
 ) {
     communication::communicate(wifi, outgoing, incoming).await;
-}
-
-#[embassy_executor::task]
-async fn imu(i2c: I2C0<'static>, sda: GPIO4<'static>, scl: GPIO5<'static>) {
-    let c = master::Config::default().with_frequency(Rate::from_khz(100));
-    let mut i2c = master::I2c::new(i2c, c)
-        .unwrap()
-        .with_sda(sda)
-        .with_scl(scl);
-
-    let mut read_buffer = [0u8];
-    if i2c
-        .write_read(SENSOR_ADDR, &[0x0F], &mut read_buffer)
-        .is_ok()
-    {
-        info!("READ buffer: {:X?}", read_buffer);
-    }
-
-    // Enable accelerometer (CTRL1_XL)
-    i2c.write(SENSOR_ADDR, &[0x10, 0x60]).unwrap();
-    // Enable gyro (CTRL2_G)
-    i2c.write(SENSOR_ADDR, &[0x11, 0x60]).unwrap();
-
-    // CTRL3_C: BDU=1 (bit 6), IF_INC=1 (bit 2)
-    i2c.write(SENSOR_ADDR, &[0x12, 0b0100_0100]).unwrap();
-
-    let comp = get_comp_values({
-        let mut data = [0u8; 12];
-        let mut comp_data = [[0i16; 6]; 400];
-        for i in 0..400 {
-            i2c.write_read(SENSOR_ADDR, &[0x22], &mut data).unwrap();
-            comp_data[i] = process_imu_data(data);
-        }
-        comp_data
-    });
-    info!("sensor compensation values: {:?}", comp);
-
-    let mut ticker = Ticker::every(Duration::from_millis(100));
-    loop {
-        let mut st = [0u8; 1];
-        i2c.write_read(SENSOR_ADDR, &[0x1E], &mut st).unwrap();
-        println!("{:X?}", &st);
-        if st[0] & 0b1 != 0 && st[0] & 0b10 != 0 {
-            let mut data = [0u8; 12];
-            if let Err(e) = i2c.write_read(SENSOR_ADDR, &[0x22], &mut data) {
-                println!("Error: {:?}", e);
-                continue;
-            }
-            let rdata = process_imu_data(data);
-            let gz = (rdata[0] - comp[0]) as f64 * 0.00875;
-            let gx = (rdata[1] - comp[1]) as f64 * 0.00875;
-            let gy = (rdata[2] - comp[2]) as f64 * 0.00875;
-            let ax = (rdata[3] - comp[3]) as f64 * 0.000061;
-            let ay = (rdata[4] - comp[4]) as f64 * 0.000061;
-            let az = (rdata[5] - comp[5]) as f64 * 0.000061;
-
-            println!(
-                "Accel[g]: ({:.2}, {:.2}, {:.2}) | Gyro[dps]: ({:.2}, {:.2}, {:.2})",
-                ax, ay, az, gx, gy, gz
-            );
-        }
-        ticker.next().await;
-    }
-}
-
-fn process_imu_data(data: [u8; 12]) -> [i16; 6] {
-    let mut res = [0i16; 6];
-    for i in 0..6 {
-        res[i] = i16::from_le_bytes([data[i * 2], data[i * 2 + 1]]);
-    }
-    res
-}
-
-fn get_comp_values(data: [[i16; 6]; 400]) -> [i16; 6] {
-    let sums = data.iter().fold([0i64; 6], |mut acc, elem| {
-        for i in 0..6 {
-            acc[i] += elem[i] as i64;
-        }
-        acc
-    });
-    sums.map(|x| (x / 400) as i16)
 }
 
 async fn init_esp() -> Peripherals {

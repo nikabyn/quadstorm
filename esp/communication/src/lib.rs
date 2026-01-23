@@ -7,17 +7,18 @@ use core::fmt::Debug;
 
 use embassy_futures::join::join3;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
-use embassy_sync::channel::{Receiver, Sender};
+use embassy_sync::zerocopy_channel::{Receiver, Sender};
 use embassy_time::{Duration, Ticker};
 use esp_hal::peripherals::WIFI;
 use esp_radio::esp_now::{
     BROADCAST_ADDRESS, EspNowManager, EspNowReceiver, EspNowSender, EspNowWifiInterface, PeerInfo,
 };
 use esp_radio::wifi::WifiMode;
-use log::{debug, error, info, trace};
+use log::{debug, error, info};
 use wincode::{SchemaRead, SchemaReadOwned, SchemaWrite};
 
 #[derive(Debug, SchemaWrite, SchemaRead)]
+#[non_exhaustive]
 pub enum RemoteRequest {
     Ping,
     PowerOn,
@@ -33,20 +34,19 @@ pub enum RemoteRequest {
 }
 
 #[derive(Debug, SchemaWrite, SchemaRead)]
-pub enum QuadcopterResponse {
+#[non_exhaustive]
+pub enum DroneResponse {
     Pong,
     Log(String),
 }
 
 pub async fn communicate<
     MsgOutgoing: SchemaWrite<Src = MsgOutgoing> + Debug,
-    const OUTGOING_CHANNEL_SIZE: usize,
     MsgIncoming: SchemaReadOwned<Dst = MsgIncoming> + Debug,
-    const INCOMING_CHANNEL_SIZE: usize,
 >(
     wifi: WIFI<'_>,
-    outgoing: Receiver<'_, NoopRawMutex, MsgOutgoing, OUTGOING_CHANNEL_SIZE>,
-    incoming: Sender<'_, NoopRawMutex, MsgIncoming, INCOMING_CHANNEL_SIZE>,
+    outgoing: Receiver<'_, NoopRawMutex, MsgOutgoing>,
+    incoming: Sender<'_, NoopRawMutex, MsgIncoming>,
 ) {
     let radio_init = esp_radio::init().expect("Failed to initialize Wi-Fi/BLE controller");
 
@@ -70,33 +70,36 @@ pub async fn communicate<
     join3(broadcast_fut, receive_fut, fetch_peers_fut).await;
 }
 
-async fn broadcast<Msg: SchemaWrite<Src = Msg> + Debug, const CHANNEL_SIZE: usize>(
+async fn broadcast<Msg: SchemaWrite<Src = Msg> + Debug>(
     mut sender: EspNowSender<'_>,
-    messages: Receiver<'_, NoopRawMutex, Msg, CHANNEL_SIZE>,
+    mut messages: Receiver<'_, NoopRawMutex, Msg>,
 ) {
     loop {
         let message = messages.receive().await;
-        let bytes = wincode::serialize(&message).unwrap();
+        let bytes = wincode::serialize(message).unwrap();
 
         let status = sender.send_async(&BROADCAST_ADDRESS, &bytes).await;
         match status {
             Ok(_) => debug!("Sent {message:?}"),
             Err(err) => error!("Error while sending: {err}"),
         }
+
+        messages.receive_done();
     }
 }
 
-async fn receive<'a, Msg: SchemaReadOwned<Dst = Msg> + Debug, const CHANNEL_SIZE: usize>(
+async fn receive<'a, Msg: SchemaReadOwned<Dst = Msg> + Debug>(
     manager: &EspNowManager<'_>,
     mut receiver: EspNowReceiver<'_>,
-    messages: Sender<'_, NoopRawMutex, Msg, CHANNEL_SIZE>,
+    mut messages: Sender<'_, NoopRawMutex, Msg>,
 ) {
     loop {
         let received = receiver.receive_async().await;
         let incoming_event = wincode::deserialize(received.data()).unwrap();
         debug!("Received {:?}", incoming_event);
 
-        messages.send(incoming_event).await;
+        *messages.send().await = incoming_event;
+        messages.send_done();
 
         if received.info.dst_address == BROADCAST_ADDRESS {
             if !manager.peer_exists(&received.info.src_address) {
@@ -127,11 +130,15 @@ async fn fetch_peers(manager: &EspNowManager<'_>) {
 }
 
 #[macro_export]
-macro_rules! static_channel {
+macro_rules! spsc_channel {
     ($t:ty, $size:expr) => {{
-        static STATIC_CELL: static_cell::ConstStaticCell<Channel<NoopRawMutex, $t, $size>> =
-            static_cell::ConstStaticCell::new(Channel::new());
-        static_cell::ConstStaticCell::take(&STATIC_CELL)
+        use core::mem::MaybeUninit;
+        use embassy_sync::zerocopy_channel::Channel;
+        use static_cell::StaticCell;
+        static mut DATA: MaybeUninit<[$t; $size]> = MaybeUninit::uninit();
+        static STATIC_CELL: StaticCell<Channel<NoopRawMutex, $t>> = StaticCell::new();
+        #[allow(static_mut_refs)]
+        STATIC_CELL.init(Channel::new(unsafe { DATA.assume_init_mut() }))
     }};
 }
 
