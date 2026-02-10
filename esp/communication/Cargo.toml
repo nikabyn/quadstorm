@@ -9,11 +9,12 @@ bench = false
 test = false
 
 [dependencies]
+defmt = { workspace = true }
+defmt-rtt = { workspace = true }
 embassy-futures = { workspace = true }
 embassy-sync = { workspace = true }
 embassy-time = { workspace = true }
 esp-hal = { workspace = true }
 esp-radio = { workspace = true }
-log = { workspace = true }
 static_cell = { workspace = true }
 wincode = { workspace = true }

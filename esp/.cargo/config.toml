@@ -1,8 +1,8 @@
 [target.riscv32imac-unknown-none-elf]
-runner = "espflash flash --monitor --chip esp32c6"
+runner = "probe-rs run --chip=esp32c6 --connect-under-reset"
 
 [env]
-ESP_LOG = "info"
+DEFMT_LOG = "info"
 
 [build]
 rustflags = [
@@ -12,6 +12,8 @@ rustflags = [
   "force-frame-pointers",
   "-Z",
   "stack-protector=all",
+  "-C",
+  "link-arg=-Tdefmt.x",
 ]
 target = "riscv32imac-unknown-none-elf"
 

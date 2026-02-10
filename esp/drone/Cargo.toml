@@ -23,8 +23,10 @@ path = "./src/esp_ikarus/main.rs"
 test = false
 
 [dependencies]
-base64 = { workspace = true }
+base64 = { version = "0.22.1", default-features = false }
 communication = { path = "../communication" }
+defmt = { workspace = true }
+defmt-rtt = { workspace = true }
 embassy-executor = { workspace = true }
 embassy-futures = { workspace = true }
 embassy-sync = { workspace = true }
@@ -36,6 +38,5 @@ esp-hal = { workspace = true, features = ["unstable"] }
 esp-println = { workspace = true }
 esp-radio = { workspace = true }
 esp-rtos = { workspace = true }
-log = { workspace = true }
 static_cell = { workspace = true }
 thiserror = { workspace = true }

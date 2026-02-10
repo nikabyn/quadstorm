@@ -13,6 +13,7 @@ test = false
 
 [dependencies]
 communication = { path = "../communication" }
+defmt = { workspace = true }
 embassy-executor = { workspace = true }
 embassy-futures = { workspace = true }
 embassy-sync = { workspace = true }
@@ -24,6 +25,5 @@ esp-hal = { workspace = true, features = ["unstable"] }
 esp-println = { workspace = true }
 esp-radio = { workspace = true }
 esp-rtos = { workspace = true }
-log = { workspace = true }
 static_cell = { workspace = true }
 thiserror = { workspace = true }

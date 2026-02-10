@@ -7,23 +7,30 @@
 )]
 
 extern crate alloc;
+use defmt_rtt as _;
+use esp_backtrace as _;
 
 use alloc::format;
+use defmt::{error, info};
 use drone::esp_ikarus::bmi323;
 use embassy_executor::Spawner;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::zerocopy_channel::{Receiver, Sender};
-use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
 use esp_hal::peripherals::{Peripherals, SW_INTERRUPT, TIMG0, WIFI};
 use esp_hal::timer::timg::TimerGroup;
-use log::info;
 
 use communication::{DroneResponse, RemoteRequest, spsc_channel};
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
 esp_bootloader_esp_idf::esp_app_desc!();
+
+// Restart the system on panic
+#[unsafe(no_mangle)]
+pub fn custom_halt() -> ! {
+    esp_hal::system::software_reset()
+}
 
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
@@ -52,7 +59,9 @@ async fn main(spawner: Spawner) -> ! {
         let imu_dma = peripherals.DMA_CH0;
 
         let mut imu = bmi323::BMI323::new(imu_spi, sck, pico, poci, imu_dma, imu_cs, imu_int1);
-        imu.configure().await.unwrap();
+        if let Err(err) = imu.configure().await {
+            error!("{}", format!("{err}"));
+        }
 
         info!("IMU initialized!");
 
@@ -98,8 +107,6 @@ async fn esp_now_communicate(
 }
 
 async fn init_esp() -> Peripherals {
-    esp_println::logger::init_logger_from_env();
-
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
 
