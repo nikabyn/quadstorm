@@ -23,6 +23,7 @@ pub enum RemoteRequest {
     Ping,
     PowerOn,
     PowerOff,
+    MotorRpm([u16; 4]),
     Move {
         /// left (-1) to right (+1)
         x: f32,
