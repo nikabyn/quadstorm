@@ -1,0 +1,15 @@
+[package]
+name = "common"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+bench = false
+test = false
+
+[dependencies]
+defmt = { version = "1.0.1", features = ["alloc"] }
+wincode = { version = "0.2.5", default-features = false, features = [
+  "alloc",
+  "derive"
+] }
