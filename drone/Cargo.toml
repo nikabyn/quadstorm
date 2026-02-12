@@ -39,5 +39,6 @@ esp-hal = { workspace = true, features = ["unstable"] }
 esp-println = { workspace = true }
 esp-radio = { workspace = true }
 esp-rtos = { workspace = true }
+m = "0.1.1"
 static_cell = { workspace = true }
 thiserror = { workspace = true }

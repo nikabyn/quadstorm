@@ -872,6 +872,7 @@ dependencies = [
  "esp-println",
  "esp-radio",
  "esp-rtos",
+ "m",
  "static_cell",
  "thiserror 2.0.18",
 ]
@@ -2063,6 +2064,12 @@ checksum = "a1dc47f592c06f33f8e3aea9591776ec7c9f9e4124778ff8a3c3b87159f7e593"
 dependencies = [
  "hashbrown",
 ]
+
+[[package]]
+name = "m"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9199148efbf3463493dd58c03a921add4623147739b9acd15f339b1dc5bfd677"
 
 [[package]]
 name = "mac_address"

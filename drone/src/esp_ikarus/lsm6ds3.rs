@@ -13,6 +13,8 @@ use esp_hal::{
     time::Rate,
 };
 
+use crate::ImuSample;
+
 const READ: u8 = 0x80;
 const WRITE: u8 = 0x7f;
 
@@ -95,6 +97,16 @@ pub struct Sample {
     pub gy: [f32; 3],
     pub xl: [f32; 3],
     pub temp: [f32; 3],
+}
+
+impl ImuSample for Sample {
+    fn gyro(&self) -> [f32; 3] {
+        self.gy
+    }
+
+    fn accel(&self) -> [f32; 3] {
+        self.xl
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

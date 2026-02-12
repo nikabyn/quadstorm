@@ -8,6 +8,7 @@
 
 extern crate alloc;
 use defmt_rtt as _;
+use drone::sensor_fusion;
 use esp_backtrace as _;
 
 use alloc::format;
@@ -72,15 +73,22 @@ async fn main(spawner: Spawner) -> ! {
         let mut imu = bmi323::BMI323::new(imu_spi, sck, pico, poci, imu_dma, imu_cs, imu_int1);
         if let Err(err) = imu.configure().await {
             error!("{}", format!("{err}"));
+            panic!("{}", err);
         }
 
         info!("IMU initialized!");
 
-        let (imu_data_tx, imu_data_rx) = spsc_channel!(bmi323::Sample, 2048).split();
+        let (imu_data_tx, imu_data_rx) = spsc_channel!(bmi323::Sample, 32).split();
         spawner.must_spawn(bmi323::read_imu(imu, imu_data_tx));
 
         imu_data_rx
     };
+
+    let mut last_sample_time = embassy_time::Instant::from_ticks(0);
+
+    let mut fusion = sensor_fusion::ComplementaryFilterFusion::new(
+        0.9, [0.0; 3], [0.0; 3], [0.0; 3], [0.0; 3], [0.0; 3],
+    );
 
     loop {
         if let Ok(remote_req) = remote_reqests.try_receive() {
@@ -99,7 +107,10 @@ async fn main(spawner: Spawner) -> ! {
             );
             info!("{}", formatted);
             // drone_responses.send(DroneResponse::Log(formatted)).await;
-            imu_data.receive_done();
+            let sample_time = embassy_time::Instant::now();
+            let dt = sample_time - last_sample_time;
+            let _control = fusion.advance(*imu_sample, dt.as_micros() as f32 / 1_000_000.0);
+            last_sample_time = sample_time;
         }
 
         embassy_futures::yield_now().await;

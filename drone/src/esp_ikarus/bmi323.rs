@@ -12,6 +12,8 @@ use esp_hal::{
     time::Rate,
 };
 
+use crate::ImuSample;
+
 const ACC_RANGE: u16 = 0b010 << 4; // +-8g, 4.10 LSB/mg
 const MG_PER_LSB: f32 = 1.0 / 4.10;
 
@@ -28,8 +30,7 @@ const ERROR: u8 = 0x01;
 const STATUS: u8 = 0x02;
 
 const INT_STATUS1: u8 = 0x0D;
-#[allow(dead_code)]
-const INT_STATUS2: u8 = 0x0E;
+// const INT_STATUS2: u8 = 0x0E;
 const INT_CONF: u8 = 0x39;
 const IO_INT_CTRL: u8 = 0x38;
 const INT_MAP2: u8 = 0x3B;
@@ -83,6 +84,16 @@ pub struct Sample {
     pub gyro: [f32; 3],
     pub accl: [f32; 3],
     pub time: u16,
+}
+
+impl ImuSample for Sample {
+    fn gyro(&self) -> [f32; 3] {
+        self.gyro
+    }
+
+    fn accel(&self) -> [f32; 3] {
+        self.accl
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -260,7 +271,7 @@ impl BMI323 {
         self.self_test_and_calibration().await?;
 
         // FIFO config
-        const FIFO_SAMPLES: u16 = 4;
+        const FIFO_SAMPLES: u16 = 1;
         const FIFO_WATERMARK_LEVEL: u16 = FIFO_SAMPLES * WORDS_PER_SAMPLE as u16;
         self.write_verify_register(FIFO_WATERMARK, FIFO_WATERMARK_LEVEL)
             .await
@@ -527,8 +538,8 @@ impl BMI323 {
     pub async fn fifo_status(&mut self) -> Result<FifoStatus, esp_hal::spi::Error> {
         let _tx = self.cs.start_tx();
         // Read INT_STATUS1 and INT_STATUS2
-        let buf = [READ | INT_STATUS1, 0, 0, 0, 0, 0];
-        //self.spi.transfer_in_place_async(&mut buf).await?;
+        let mut buf = [READ | INT_STATUS1, 0, 0, 0, 0, 0];
+        self.spi.transfer_in_place_async(&mut buf).await?;
         drop(_tx);
         let fifo_watermark = buf[3] & 0x40 > 0;
         let fifo_full = buf[5] & 0x80 > 0;
