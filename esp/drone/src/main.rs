@@ -43,13 +43,18 @@ async fn main(spawner: Spawner) -> ! {
     let mut imu_data = {
         info!("IMU init...");
 
-        let poci = peripherals.GPIO0;
-        let imu_cs = peripherals.GPIO1;
-        let pico = peripherals.GPIO2;
-        let sck = peripherals.GPIO3;
-        let imu_int1 = peripherals.GPIO14;
+        let poci = peripherals.GPIO5;
+        let imu_cs = peripherals.GPIO23;
+        //let imu_cs = peripherals.GPIO0;
+        let pico = peripherals.GPIO4;
+        let sck = peripherals.GPIO16;
+        //let sck = peripherals.GPIO9;
+        let imu_int1 = peripherals.GPIO22;
+        //let imu_int1 = peripherals.GPIO18;
         let imu_spi = peripherals.SPI2;
         let imu_dma = peripherals.DMA_CH0;
+
+        embassy_time::Timer::after_millis(500).await;
 
         let mut imu = bmi323::BMI323::new(imu_spi, sck, pico, poci, imu_dma, imu_cs, imu_int1);
         imu.configure().await.unwrap();
@@ -79,6 +84,7 @@ async fn main(spawner: Spawner) -> ! {
                 "gyro={:?}, accl={:?}, time={}",
                 imu_sample.gyro, imu_sample.accl, imu_sample.time
             );
+            info!("{formatted}");
             *drone_responses.send().await = DroneResponse::Log(formatted);
             imu_data.receive_done();
             drone_responses.send_done();
