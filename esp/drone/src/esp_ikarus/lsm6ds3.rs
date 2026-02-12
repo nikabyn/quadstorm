@@ -1,3 +1,4 @@
+use defmt::{error, warn};
 use embassy_executor::SpawnToken;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_time::Instant;
@@ -149,8 +150,11 @@ async fn read_imu_task(
 
             let lag = async {
                 if over_run || leftover_len / 2 != pattern as usize {
-                    log::warn!(
-                        "fifo lagged, over_run={over_run}, pattern: {pattern}, leftover_len: {leftover_len} {}",
+                    warn!(
+                        "fifo lagged, over_run={}, pattern: {}, leftover_len: {} {}",
+                        over_run,
+                        pattern,
+                        leftover_len,
                         leftover_len / 2
                     );
 
@@ -166,7 +170,7 @@ async fn read_imu_task(
             let end = match end {
                 Ok(end) => end,
                 Err(e) => {
-                    log::error!("unable to read IMU data: {e:?}");
+                    error!("unable to read IMU data: {:?}", e);
                     // TODO: do something about it
                     break;
                 }
@@ -473,8 +477,8 @@ impl LSM6DS3 {
             .map_err(CheckedWriteError::Spi)?;
 
         if val != r {
-            log::error!("val {val:08b} != {r:08b} r");
-            log::error!("val {val:02x} != {r:02x} r");
+            error!("val {:08b} != {:08b} r", val, r);
+            error!("val {:02x} != {:02x} r", val, r);
             return Err(CheckedWriteError::Verification);
         }
 

@@ -1,10 +1,11 @@
 #![no_std]
 
 extern crate alloc;
+use defmt_rtt as _;
 
 use alloc::string::String;
-use core::fmt::Debug;
 
+use defmt::{Format, debug, error, info};
 use embassy_futures::join::join3;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::zerocopy_channel::{Receiver, Sender};
@@ -14,15 +15,15 @@ use esp_radio::esp_now::{
     BROADCAST_ADDRESS, EspNowManager, EspNowReceiver, EspNowSender, EspNowWifiInterface, PeerInfo,
 };
 use esp_radio::wifi::WifiMode;
-use log::{debug, error, info};
 use wincode::{SchemaRead, SchemaReadOwned, SchemaWrite};
 
-#[derive(Debug, SchemaWrite, SchemaRead)]
+#[derive(Format, SchemaWrite, SchemaRead)]
 #[non_exhaustive]
 pub enum RemoteRequest {
     Ping,
     PowerOn,
     PowerOff,
+    MotorRpm([u16; 4]),
     Move {
         /// left (-1) to right (+1)
         x: f32,
@@ -33,7 +34,7 @@ pub enum RemoteRequest {
     },
 }
 
-#[derive(Debug, SchemaWrite, SchemaRead)]
+#[derive(Format, SchemaWrite, SchemaRead)]
 #[non_exhaustive]
 pub enum DroneResponse {
     Pong,
@@ -41,8 +42,8 @@ pub enum DroneResponse {
 }
 
 pub async fn communicate<
-    MsgOutgoing: SchemaWrite<Src = MsgOutgoing> + Debug,
-    MsgIncoming: SchemaReadOwned<Dst = MsgIncoming> + Debug,
+    MsgOutgoing: SchemaWrite<Src = MsgOutgoing> + Format,
+    MsgIncoming: SchemaReadOwned<Dst = MsgIncoming> + Format,
 >(
     wifi: WIFI<'_>,
     outgoing: Receiver<'_, NoopRawMutex, MsgOutgoing>,
@@ -70,7 +71,7 @@ pub async fn communicate<
     join3(broadcast_fut, receive_fut, fetch_peers_fut).await;
 }
 
-async fn broadcast<Msg: SchemaWrite<Src = Msg> + Debug>(
+async fn broadcast<Msg: SchemaWrite<Src = Msg> + Format>(
     mut sender: EspNowSender<'_>,
     mut messages: Receiver<'_, NoopRawMutex, Msg>,
 ) {
@@ -80,15 +81,15 @@ async fn broadcast<Msg: SchemaWrite<Src = Msg> + Debug>(
 
         let status = sender.send_async(&BROADCAST_ADDRESS, &bytes).await;
         match status {
-            Ok(_) => debug!("Sent {message:?}"),
-            Err(err) => error!("Error while sending: {err}"),
+            Ok(_) => debug!("Sent {}", message),
+            Err(err) => error!("Error while sending: {}", err),
         }
 
         messages.receive_done();
     }
 }
 
-async fn receive<Msg: SchemaReadOwned<Dst = Msg> + Debug>(
+async fn receive<Msg: SchemaReadOwned<Dst = Msg> + Format>(
     manager: &EspNowManager<'_>,
     mut receiver: EspNowReceiver<'_>,
     mut messages: Sender<'_, NoopRawMutex, Msg>,

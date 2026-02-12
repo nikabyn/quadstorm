@@ -1,0 +1,16 @@
+[package]
+name = "remote-terminal"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.101"
+defmt-decoder = "1.1.0"
+defmt-parser = "1.0.0"
+object = { version = "0.38.1", default-features = false, features = [
+  "elf",
+  "read_core",
+  "std",
+] }
+probe-rs = { git = "https://github.com/probe-rs/probe-rs", rev = "8abe521572dc2bfb0878de489547f0c3ed054c52" }
+ratatui = "0.30.0"

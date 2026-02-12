@@ -7,16 +7,17 @@
 )]
 
 use core::mem::MaybeUninit;
+use defmt_rtt as _;
+use esp_backtrace as _;
 
 use base64::Engine;
+use defmt::info;
 use embassy_executor::Spawner;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::lazy_lock::LazyLock;
 use embassy_time::{Duration, Timer};
-use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
 use esp_hal::timer::timg::TimerGroup;
-use log::info;
 
 use drone::esp_ikarus::bmi323;
 
@@ -24,10 +25,14 @@ use drone::esp_ikarus::bmi323;
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
 esp_bootloader_esp_idf::esp_app_desc!();
 
+// Restart the system on panic
+#[unsafe(no_mangle)]
+pub fn custom_halt() -> ! {
+    esp_hal::system::software_reset()
+}
+
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
-    esp_println::logger::init_logger_from_env();
-
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let p = esp_hal::init(config);
 
@@ -46,12 +51,12 @@ async fn main(spawner: Spawner) -> ! {
     let imu_dma = p.DMA_CH0;
 
     // SPI
-    log::info!("IMU init..");
+    info!("IMU init..");
 
     let mut imu = bmi323::BMI323::new(imu_spi, sck, pico, poci, imu_dma, imu_cs, imu_int1);
     imu.configure().await.unwrap();
 
-    log::info!("IMU ready");
+    info!("IMU ready");
 
     let (imu_rx, imu_task) = {
         static mut CHANNEL_BUF: MaybeUninit<[bmi323::Sample; 8]> = core::mem::MaybeUninit::uninit();
@@ -70,7 +75,7 @@ async fn main(spawner: Spawner) -> ! {
     spawner.must_spawn(imu_task);
 
     loop {
-        log::info!("still alive");
+        info!("still alive");
         Timer::after(Duration::from_secs(10)).await;
     }
 }
@@ -99,6 +104,6 @@ async fn imu_consumer(
             .unwrap();
         let b64_str = str::from_utf8(&base64_bytes[0..len]).unwrap();
 
-        info!("{sample:0.5?}, B64:{b64_str}");
+        info!("{:?}, B64:{}", sample, b64_str);
     }
 }

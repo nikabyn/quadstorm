@@ -7,24 +7,31 @@
 )]
 
 extern crate alloc;
-use embassy_futures::select::{Either, select};
 use esp_alloc as _;
 use esp_backtrace as _;
+use esp_println as _;
 
+use defmt::{error, info, warn};
 use embassy_executor::Spawner;
+use embassy_futures::select::{Either, select};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::zerocopy_channel::{Receiver, Sender};
 use embassy_time::{Duration, Instant, Ticker};
 use esp_hal::peripherals::{Peripherals, SW_INTERRUPT, TIMG0};
 use esp_hal::timer::timg::TimerGroup;
 use esp_hal::{clock::CpuClock, peripherals::WIFI};
-use log::{error, info, warn};
 
 use communication::{DroneResponse, RemoteRequest, spsc_channel};
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
 esp_bootloader_esp_idf::esp_app_desc!();
+
+// Restart the system on panic
+#[unsafe(no_mangle)]
+pub fn custom_halt() -> ! {
+    esp_hal::system::software_reset()
+}
 
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
@@ -63,10 +70,10 @@ async fn main(spawner: Spawner) -> ! {
                 }
             }
             DroneResponse::Log(content) => {
-                info!("Log: {content}");
+                info!("Log: {}", content);
             }
             _ => {
-                error!("Unexpected response: {drone_res:?}");
+                error!("Unexpected response: {}", drone_res);
             }
         }
 
@@ -84,8 +91,6 @@ async fn esp_now_communicate(
 }
 
 async fn init_esp() -> Peripherals {
-    esp_println::logger::init_logger_from_env();
-
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
 

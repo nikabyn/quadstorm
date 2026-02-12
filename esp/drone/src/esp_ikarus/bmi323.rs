@@ -1,3 +1,4 @@
+use defmt::{Format, debug, error, info};
 use embassy_executor::SpawnToken;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use esp_hal::{
@@ -10,7 +11,6 @@ use esp_hal::{
     spi::master::SpiDmaBus,
     time::Rate,
 };
-use log::{debug, error, info, trace};
 
 const ACC_RANGE: u16 = 0b010 << 4; // +-8g, 4.10 LSB/mg
 const MG_PER_LSB: f32 = 1.0 / 4.10;
@@ -77,7 +77,7 @@ pub struct BMI323 {
     int1: Input<'static>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Format, Clone, Copy)]
 pub struct Sample {
     pub gyro: [f32; 3],
     pub accl: [f32; 3],
@@ -117,7 +117,7 @@ pub async fn read_imu(
         {
             let len = (unread_words as usize * 2).min(buf.len());
             if let Err(e) = imu.read_fifo(&mut buf).await {
-                error!("unable to read from imu: {e:?}");
+                error!("unable to read from imu: {:?}", e);
                 // TODO: do something about it
                 break;
             }
@@ -483,7 +483,7 @@ impl BMI323 {
         self.spi.transfer_in_place_async(&mut buf).await?;
         let v = u16::from_le_bytes([buf[2], buf[3]]);
 
-        trace!("[SPI] read(0x{reg:02x}) => 0x{v:04x}");
+        debug!("[SPI] read(0x{:02x}) => 0x{:04x}", reg, v);
         Ok(v)
     }
 
@@ -491,7 +491,7 @@ impl BMI323 {
         let _tx = self.cs.start_tx();
 
         let [val0, val1] = val.to_le_bytes();
-        trace!("[SPI] write(0x{reg:02x}) => 0x{val:04x}");
+        debug!("[SPI] write(0x{:02x}) => 0x{:04x}", reg, val);
         self.spi.write_async(&[WRITE & reg, val0, val1]).await?;
 
         Ok(())
@@ -507,8 +507,8 @@ impl BMI323 {
             .map_err(CheckedWriteError::Spi)?;
 
         if val != r {
-            error!("val {val:08b} != {r:08b} r");
-            error!("val {val:02x} != {r:02x} r");
+            error!("val {:08b} != {:08b} r", val, r);
+            error!("val {:02x} != {:02x} r", val, r);
             return Err(CheckedWriteError::Verification);
         }
 
@@ -542,7 +542,9 @@ impl BMI323 {
         let unread_words = u16::from_le_bytes([buf[2], buf[3]]);
 
         debug!(
-            "[BMI323] fifo_status: full={fifo_full}, watermark={fifo_watermark}, unread_words={unread_words}, samples={}",
+            "[BMI323] fifo_status: full={}, unread_words={}, samples={}",
+            fifo_full,
+            unread_words,
             unread_words / WORDS_PER_SAMPLE as u16
         );
 
