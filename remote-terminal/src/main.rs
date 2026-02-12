@@ -5,8 +5,7 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
-use common::DroneResponse;
-use common::RemoteRequest;
+use common_messages::{DroneResponse, RemoteRequest};
 use defmt_decoder::DecodeError;
 use defmt_parser::Level;
 use probe_rs::Core;

@@ -20,7 +20,8 @@ use esp_hal::clock::CpuClock;
 use esp_hal::peripherals::{Peripherals, SW_INTERRUPT, TIMG0, WIFI};
 use esp_hal::timer::timg::TimerGroup;
 
-use communication::{DroneResponse, RemoteRequest, spsc_channel};
+use common_messages::{DroneResponse, RemoteRequest};
+use common_esp::spsc_channel;
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
@@ -109,7 +110,7 @@ async fn esp_now_communicate(
     outgoing: Receiver<'static, NoopRawMutex, DroneResponse>,
     incoming: Sender<'static, NoopRawMutex, RemoteRequest>,
 ) {
-    communication::communicate(wifi, outgoing, incoming).await;
+    common_esp::communicate(wifi, outgoing, incoming).await;
 }
 
 async fn init_esp() -> Peripherals {

@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.101"
-common = { path = "../../common" }
+common-messages = { path = "../common-messages" }
 defmt-decoder = "1.1.0"
 defmt-parser = "1.0.0"
 object = { version = "0.38.1", default-features = false, features = [

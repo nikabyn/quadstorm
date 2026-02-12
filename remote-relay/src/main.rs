@@ -20,8 +20,10 @@ use embassy_time::{Duration, Instant, Ticker};
 use esp_hal::peripherals::{Peripherals, SW_INTERRUPT, TIMG0};
 use esp_hal::timer::timg::TimerGroup;
 use esp_hal::{clock::CpuClock, peripherals::WIFI};
+use rtt_target::{rtt_init, set_defmt_channel};
 
-use communication::{DroneResponse, RemoteRequest, spsc_channel};
+use common_esp::spsc_channel;
+use common_messages::{DroneResponse, RemoteRequest};
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
@@ -35,6 +37,30 @@ pub fn custom_halt() -> ! {
 
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
+    let channels = rtt_init! {
+        up: {
+            0: {
+                size: 1024,
+                name: "defmt",
+            }
+            1: {
+                size: 1024,
+                name: "defmt_drone",
+            }
+            2: {
+                size: 1024,
+                name: "drone_res",
+            }
+        }
+        down: {
+            0: {
+                size: 1024,
+                name: "remote_req",
+            }
+        }
+    };
+    set_defmt_channel(channels.up.0);
+
     let peripherals = init_esp().await;
     init_rtos(peripherals.TIMG0, peripherals.SW_INTERRUPT).await;
     info!("Embassy initialized!");
@@ -87,7 +113,7 @@ async fn esp_now_communicate(
     outgoing: Receiver<'static, NoopRawMutex, RemoteRequest>,
     incoming: Sender<'static, NoopRawMutex, DroneResponse>,
 ) {
-    communication::communicate(wifi, outgoing, incoming).await
+    common_esp::communicate(wifi, outgoing, incoming).await
 }
 
 async fn init_esp() -> Peripherals {

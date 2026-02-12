@@ -19,9 +19,3 @@ target = "riscv32imac-unknown-none-elf"
 
 [unstable]
 build-std = ["alloc", "core"]
-
-[alias]
-checkall = "check --workspace"
-call = "checkall"
-buildall = "build --workspace"
-ball = "buildall"

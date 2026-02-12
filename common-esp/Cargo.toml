@@ -1,5 +1,5 @@
 [package]
-name = "communication"
+name = "common-esp"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
@@ -10,7 +10,6 @@ test = false
 
 [dependencies]
 defmt = { workspace = true }
-defmt-rtt = { workspace = true }
 embassy-futures = { workspace = true }
 embassy-sync = { workspace = true }
 embassy-time = { workspace = true }

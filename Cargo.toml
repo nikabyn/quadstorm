@@ -1,13 +1,10 @@
 [workspace]
 resolver = "3"
-members = ["communication", "drone", "remote"]
-default-members = []
-
-[workspace.package]
-edition = "2024"
-rust-version = "1.88"
+members = ["drone", "remote-relay", "remote-terminal"]
 
 [workspace.dependencies]
+common-esp = { path = "./common-esp" }
+common-messages = { path = "./common-messages" }
 defmt = { version = "1.0.1", features = ["alloc"] }
 defmt-rtt = { version = "1.1.0", features = ["disable-blocking-mode"] }
 embassy-executor = { version = "0.9.1", features = ["defmt"] }
@@ -46,6 +43,7 @@ esp-rtos = { version = "0.2.0", features = [
   "esp-radio",
   "esp32c6",
 ] }
+rtt-target = { version = "0.6.2", features = ["defmt"] }
 static_cell = { version = "2.1.1" }
 thiserror = { version = "2.0.17", default-features = false }
 wincode = { version = "0.2.5", default-features = false, features = [

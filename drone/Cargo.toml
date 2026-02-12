@@ -1,19 +1,33 @@
 [package]
-name = "remote"
+name = "drone"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
+default-run = "drone"
+
+[lib]
+bench = false
+path = "./src/lib.rs"
+test = false
 
 [[bin]]
 bench = false
-doctest = false
-name = "remote"
-path = "src/main.rs"
+name = "drone"
+path = "./src/main.rs"
+test = false
+
+[[bin]]
+bench = false
+name = "esp-ikarus"
+path = "./src/esp_ikarus/main.rs"
 test = false
 
 [dependencies]
-communication = { path = "../communication" }
+base64 = { version = "0.22.1", default-features = false }
+common-esp = { workspace = true }
+common-messages = { workspace = true }
 defmt = { workspace = true }
+defmt-rtt = { workspace = true }
 embassy-executor = { workspace = true }
 embassy-futures = { workspace = true }
 embassy-sync = { workspace = true }
