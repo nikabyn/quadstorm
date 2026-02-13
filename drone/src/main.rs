@@ -87,7 +87,7 @@ async fn main(spawner: Spawner) -> ! {
     let mut last_sample_time = embassy_time::Instant::from_ticks(0);
 
     let mut fusion = sensor_fusion::ComplementaryFilterFusion::new(
-        0.9, [0.0; 3], [0.0; 3], [0.0; 3], [0.0; 3], [0.0; 3],
+        0.98, [0.0; 3], [0.0; 3], [0.0; 3], [0.0; 3], [0.0; 3],
     );
 
     loop {
@@ -105,12 +105,20 @@ async fn main(spawner: Spawner) -> ! {
                 "gyro={:?}, accl={:?}, time={}",
                 imu_sample.gyro, imu_sample.accl, imu_sample.time
             );
-            info!("{}", formatted);
-            // drone_responses.send(DroneResponse::Log(formatted)).await;
             let sample_time = embassy_time::Instant::now();
             let dt = sample_time - last_sample_time;
             let _control = fusion.advance(*imu_sample, dt.as_micros() as f32 / 1_000_000.0);
             last_sample_time = sample_time;
+            imu_data.receive_done();
+
+            let formatted = format!(
+                "ori: {:?}, dt: {}ms, loop_freq: {}Hz",
+                fusion.orientation(),
+                dt.as_micros() as f32 / 1_000.0,
+                1_000_000.0 / (embassy_time::Instant::now() - sample_time).as_micros() as f32
+            );
+            info!("{}", formatted);
+            // drone_responses.send(DroneResponse::Log(formatted)).await;
         }
 
         embassy_futures::yield_now().await;

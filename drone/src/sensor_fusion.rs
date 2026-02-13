@@ -1,3 +1,5 @@
+use core::f32::consts::PI;
+
 use m::Float;
 
 use crate::ImuSample;
@@ -105,10 +107,13 @@ impl ComplementaryFilterFusion {
             IMU_AXIS_SCALE[2] * sample.accel()[IMU_AXIS_MAP[2]] * dt,
         ];
 
+        const RAD2DEG: F = 180.0 / core::f32::consts::PI;
         let accel_orientation = [
-            (gravity[1] / (gravity[0] * gravity[0] + gravity[2] * gravity[2]).sqrt()).atan(),
-            (-gravity[0] / (gravity[1] * gravity[1] + gravity[2] * gravity[2]).sqrt()).atan(),
-            (gravity[2] / (gravity[0] * gravity[0] + gravity[1] * gravity[1]).sqrt()).atan(),
+            -(gravity[1] / (gravity[0] * gravity[0] + gravity[2] * gravity[2]).sqrt()).atan()
+                * RAD2DEG,
+            -(-gravity[0] / (gravity[1] * gravity[1] + gravity[2] * gravity[2]).sqrt()).atan()
+                * RAD2DEG,
+            0.0,
         ];
 
         self.orientation[0] =

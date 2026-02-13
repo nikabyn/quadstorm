@@ -17,7 +17,7 @@ use crate::ImuSample;
 const ACC_RANGE: u16 = 0b010 << 4; // +-8g, 4.10 LSB/mg
 const MG_PER_LSB: f32 = 1.0 / 4.10;
 
-const GYR_RANGE: u16 = 0b100 << 4; // +-2000deg/s, 16.4 LSB/deg/mg
+const GYR_RANGE: u16 = 0b100 << 4; // +-2000deg/s, 16.4 LSB/deg/s
 const DPS_PER_LSB: f32 = 1.0 / 16.4;
 
 const READ: u8 = 0x80;
