@@ -510,7 +510,7 @@
       "plot": "../../../../../../../../run/media/enbyio/TRANSCEND/gdmr_quad/fix/",
       "pos_files": "",
       "specctra_dsn": "",
-      "step": "",
+      "step": "mainboard_mk1.step",
       "svg": "",
       "vrml": ""
     },
