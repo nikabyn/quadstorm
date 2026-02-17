@@ -1,4 +1,4 @@
-use defmt::{Format, debug, error, info};
+use defmt::{Format, debug, error, info, trace};
 use embassy_executor::SpawnToken;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use esp_hal::{
@@ -19,6 +19,8 @@ const MG_PER_LSB: f32 = 1.0 / 4.10;
 
 const GYR_RANGE: u16 = 0b100 << 4; // +-2000deg/s, 16.4 LSB/deg/s
 const DPS_PER_LSB: f32 = 1.0 / 16.4;
+// const MUSEC_PER_LSB: f32 = 39.0625;
+// const SEC_PER_LSB: f32 = MUSEC_PER_LSB / (1000.0 * 1000.0);
 
 const READ: u8 = 0x80;
 const WRITE: u8 = 0x7f;
@@ -84,6 +86,7 @@ pub struct Sample {
     pub gyro: [f32; 3],
     pub accl: [f32; 3],
     pub time: u16,
+    pub dt: f32,
 }
 
 impl ImuSample for Sample {
@@ -93,6 +96,10 @@ impl ImuSample for Sample {
 
     fn accel(&self) -> [f32; 3] {
         self.accl
+    }
+
+    fn dt(&self) -> f32 {
+        self.dt
     }
 }
 
@@ -113,7 +120,7 @@ pub async fn read_imu(
     debug!("[BMI323] beginning to read imu");
     _ = imu.write_register(FIFO_CTRL, FIFO_FLUSH).await;
 
-    let mut buf = [0u8; BYTES_PER_SAMPLE * 64];
+    let mut buf = [0u8; BYTES_PER_SAMPLE * 265 + 2];
 
     embassy_time::Timer::after_millis(5).await;
 
@@ -152,10 +159,15 @@ pub async fn read_imu(
 
                 let time = u16::from_le_bytes(time);
 
+                // 1s / ODR
+                // ODR = 1600Hz
+                let dt = 1.0 / 1600.0;
+
                 let sample = Sample {
                     gyro: [rx, ry, rz],
                     accl: [ax, ay, az],
                     time,
+                    dt,
                 };
 
                 *tx.send().await = sample;
@@ -315,8 +327,8 @@ impl BMI323 {
 
         // TODO: turn ODR back up
         // acc config
-        const ACC_ODR: u16 = 0b1011; // 0.8kHz
-        // const ACC_ODR: u16 = 0b1100; // 1.6kHz
+        // const ACC_ODR: u16 = 0b1011; // 0.8kHz
+        const ACC_ODR: u16 = 0b1100; // 1.6kHz
         const ACC_BW: u16 = 0b0 << 7; // ODR/2 TODO: test
         const ACC_AVG: u16 = 0b000 << 8; // Average 0 samples
         const ACC_MODE: u16 = 0b111 << 12; // High performance
@@ -325,8 +337,8 @@ impl BMI323 {
             .map_err(ConfigurationError::Verification)?;
 
         // gyr config
-        const GYR_ODR: u16 = 0b1011; // 0.8kHz
-        // const GYR_ODR: u16 = 0b1100; // 1.6kHz
+        // const GYR_ODR: u16 = 0b1011; // 0.8kHz
+        const GYR_ODR: u16 = 0b1100; // 1.6kHz
         const GYR_BW: u16 = 0b0 << 7; // ODR/2 TODO: test
         const GYR_AVG: u16 = 0b000 << 8; // Average 0 samples
         const GYR_MODE: u16 = 0b111 << 12; // High performance
@@ -550,7 +562,7 @@ impl BMI323 {
         drop(_tx);
         let unread_words = u16::from_le_bytes([buf[2], buf[3]]);
 
-        debug!(
+        trace!(
             "[BMI323] fifo_status: full={}, unread_words={}, samples={}",
             fifo_full,
             unread_words,
@@ -567,8 +579,9 @@ impl BMI323 {
     pub async fn read_fifo(&mut self, buf: &mut [u8]) -> Result<(), esp_hal::spi::Error> {
         let _tx = self.cs.start_tx();
 
-        self.spi.write_async(&[READ | FIFO_DATA, 0]).await?;
-        self.spi.read_async(buf).await?;
+        buf[0] = READ | FIFO_DATA;
+        buf[1] = 0;
+        self.spi.transfer_in_place_async(buf).await?;
 
         Ok(())
     }

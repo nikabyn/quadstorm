@@ -97,6 +97,7 @@ pub struct Sample {
     pub gy: [f32; 3],
     pub xl: [f32; 3],
     pub temp: [f32; 3],
+    pub dt: f32,
 }
 
 impl ImuSample for Sample {
@@ -106,6 +107,10 @@ impl ImuSample for Sample {
 
     fn accel(&self) -> [f32; 3] {
         self.xl
+    }
+
+    fn dt(&self) -> f32 {
+        self.dt
     }
 }
 
@@ -213,10 +218,15 @@ async fn read_imu_task(
                 let t1 = (i16::from_le_bytes(t1) as f32 / 256.0) + 25.0;
                 let t2 = (i16::from_le_bytes(t2) as f32 / 256.0) + 25.0;
 
+                // dt = 1s / ODR
+                // ODR = 1600Hz
+                let dt = 1.0 / 1600.0;
+
                 let sample = Sample {
                     gy: [rx, ry, rz],
                     xl: [ax, ay, az],
                     temp: [t0, t1, t2],
+                    dt,
                 };
 
                 *tx.send().await = match lag {

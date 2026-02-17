@@ -16,12 +16,6 @@ name = "drone"
 path = "./src/main.rs"
 test = false
 
-[[bin]]
-bench = false
-name = "esp-ikarus"
-path = "./src/esp_ikarus/main.rs"
-test = false
-
 [dependencies]
 base64 = { version = "0.22.1", default-features = false }
 common-esp = { workspace = true }

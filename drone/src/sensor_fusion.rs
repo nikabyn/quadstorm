@@ -1,5 +1,3 @@
-use core::f32::consts::PI;
-
 use m::Float;
 
 use crate::ImuSample;
@@ -7,7 +5,7 @@ use crate::ImuSample;
 type F = f32;
 
 const IMU_AXIS_MAP: [usize; 3] = [0, 1, 2];
-const IMU_AXIS_SCALE: [F; 3] = [1.0, 1.0, 1.0];
+const IMU_AXIS_SCALE: [F; 3] = [1.0, 1.0, -1.0];
 
 struct Pid {
     // tune
@@ -94,25 +92,40 @@ impl ComplementaryFilterFusion {
         self.orientation
     }
 
-    pub fn advance(&mut self, sample: impl ImuSample, dt: F) -> [F; 3] {
+    pub fn advance(&mut self, sample: impl ImuSample) -> [F; 3] {
         let gyro_orientation = [
-            self.orientation[0] + (IMU_AXIS_SCALE[0] * sample.gyro()[IMU_AXIS_MAP[0]] * dt),
-            self.orientation[1] + (IMU_AXIS_SCALE[1] * sample.gyro()[IMU_AXIS_MAP[1]] * dt),
-            self.orientation[2] + (IMU_AXIS_SCALE[2] * sample.gyro()[IMU_AXIS_MAP[2]] * dt),
+            self.orientation[0]
+                + (IMU_AXIS_SCALE[0] * sample.gyro()[IMU_AXIS_MAP[0]] * sample.dt()),
+            self.orientation[1]
+                + (IMU_AXIS_SCALE[1] * sample.gyro()[IMU_AXIS_MAP[1]] * sample.dt()),
+            self.orientation[2]
+                + (IMU_AXIS_SCALE[2] * sample.gyro()[IMU_AXIS_MAP[2]] * sample.dt()),
         ];
 
         let gravity = [
-            IMU_AXIS_SCALE[0] * sample.accel()[IMU_AXIS_MAP[0]] * dt,
-            IMU_AXIS_SCALE[1] * sample.accel()[IMU_AXIS_MAP[1]] * dt,
-            IMU_AXIS_SCALE[2] * sample.accel()[IMU_AXIS_MAP[2]] * dt,
+            IMU_AXIS_SCALE[0] * sample.accel()[IMU_AXIS_MAP[0]] * sample.dt(),
+            IMU_AXIS_SCALE[1] * sample.accel()[IMU_AXIS_MAP[1]] * sample.dt(),
+            IMU_AXIS_SCALE[2] * sample.accel()[IMU_AXIS_MAP[2]] * sample.dt(),
+        ];
+        let gravity_norm = gravity
+            .iter()
+            .map(|g| g * g)
+            .reduce(|a, b| a + b)
+            .unwrap()
+            .sqrt();
+        let ngravity = [
+            gravity[0] / gravity_norm,
+            gravity[1] / gravity_norm,
+            gravity[2] / gravity_norm,
         ];
 
         const RAD2DEG: F = 180.0 / core::f32::consts::PI;
         let accel_orientation = [
-            -(gravity[1] / (gravity[0] * gravity[0] + gravity[2] * gravity[2]).sqrt()).atan()
-                * RAD2DEG,
-            -(-gravity[0] / (gravity[1] * gravity[1] + gravity[2] * gravity[2]).sqrt()).atan()
-                * RAD2DEG,
+            -F::atan2(ngravity[1], ngravity[2]) * RAD2DEG,
+            -F::atan2(
+                -gravity[0],
+                (ngravity[1] * ngravity[1] + ngravity[2] * ngravity[2]).sqrt(),
+            ) * RAD2DEG,
             0.0,
         ];
 
@@ -120,8 +133,9 @@ impl ComplementaryFilterFusion {
             self.alpha * gyro_orientation[0] + (1.0 - self.alpha) * accel_orientation[0];
         self.orientation[1] =
             self.alpha * gyro_orientation[1] + (1.0 - self.alpha) * accel_orientation[1];
-        self.orientation[2] =
-            self.alpha * gyro_orientation[2] + (1.0 - self.alpha) * accel_orientation[2];
+        // self.orientation[2] =
+        //     self.alpha * gyro_orientation[2] + (1.0 - self.alpha) * accel_orientation[2];
+        self.orientation[2] = gyro_orientation[2];
 
         [
             self.pid[0].advance(self.target[0] - self.orientation[0]),
