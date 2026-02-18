@@ -28,6 +28,7 @@ const ERROR: u8 = 0x01;
 const STATUS: u8 = 0x02;
 
 const INT_STATUS1: u8 = 0x0D;
+#[allow(dead_code)]
 const INT_STATUS2: u8 = 0x0E;
 const INT_CONF: u8 = 0x39;
 const IO_INT_CTRL: u8 = 0x38;
@@ -291,12 +292,9 @@ impl BMI323 {
         .map_err(ConfigurationError::Verification)?;
 
         const INT_LATCH: u16 = 0; // non-latched interupt
-        self.write_verify_register(
-            INT_CONF,
-            INT_LATCH,
-        )
-        .await
-        .map_err(ConfigurationError::Verification)?;
+        self.write_verify_register(INT_CONF, INT_LATCH)
+            .await
+            .map_err(ConfigurationError::Verification)?;
 
         const FIFO_WATERMARK_INT: u16 = 0b01 << 12; // map to int1
         const FIFO_FULL_INT: u16 = 0b10 << 14; // map to int2
@@ -529,7 +527,7 @@ impl BMI323 {
     pub async fn fifo_status(&mut self) -> Result<FifoStatus, esp_hal::spi::Error> {
         let _tx = self.cs.start_tx();
         // Read INT_STATUS1 and INT_STATUS2
-        let mut buf = [READ | INT_STATUS1, 0, 0, 0, 0, 0];
+        let buf = [READ | INT_STATUS1, 0, 0, 0, 0, 0];
         //self.spi.transfer_in_place_async(&mut buf).await?;
         drop(_tx);
         let fifo_watermark = buf[3] & 0x40 > 0;

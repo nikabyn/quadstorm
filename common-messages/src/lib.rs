@@ -4,8 +4,8 @@ extern crate alloc;
 
 use alloc::string::String;
 
-use defmt::{Format, debug, error, info};
-use wincode::{SchemaRead, SchemaReadOwned, SchemaWrite};
+use defmt::Format;
+use wincode::{SchemaRead, SchemaWrite};
 
 #[derive(Format, SchemaWrite, SchemaRead)]
 #[non_exhaustive]

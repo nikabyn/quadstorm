@@ -14,15 +14,15 @@ use esp_println as _;
 use defmt::{error, info, warn};
 use embassy_executor::Spawner;
 use embassy_futures::select::{Either, select};
-use embassy_sync::blocking_mutex::raw::NoopRawMutex;
-use embassy_sync::zerocopy_channel::{Receiver, Sender};
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::channel::{Receiver, Sender};
 use embassy_time::{Duration, Instant, Ticker};
 use esp_hal::peripherals::{Peripherals, SW_INTERRUPT, TIMG0};
 use esp_hal::timer::timg::TimerGroup;
 use esp_hal::{clock::CpuClock, peripherals::WIFI};
 use rtt_target::{rtt_init, set_defmt_channel};
 
-use common_esp::spsc_channel;
+use common_esp::mpsc_channel;
 use common_messages::{DroneResponse, RemoteRequest};
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
@@ -65,15 +65,27 @@ async fn main(spawner: Spawner) -> ! {
     init_rtos(peripherals.TIMG0, peripherals.SW_INTERRUPT).await;
     info!("Embassy initialized!");
 
-    let (mut drone_responses, mut remote_requests) = {
-        let (remote_tx, remote_rx) = spsc_channel!(RemoteRequest, 64).split();
-        let (drone_tx, drone_rx) = spsc_channel!(DroneResponse, 64).split();
-        spawner.must_spawn(esp_now_communicate(peripherals.WIFI, remote_rx, drone_tx));
-        (drone_rx, remote_tx)
+    let (drone_responses, remote_requests) = {
+        let remote = mpsc_channel!(RemoteRequest, 64);
+        let drone = mpsc_channel!(DroneResponse, 64);
+        spawner.must_spawn(esp_now_communicate(
+            peripherals.WIFI,
+            remote.receiver(),
+            drone.sender(),
+        ));
+        (drone.receiver(), remote.sender())
     };
 
     let mut ticker = Ticker::every(Duration::from_millis(2000));
     let mut last_ping_sent = None;
+    #[embassy_executor::task]
+    async fn esp_now_communicate(
+        wifi: WIFI<'static>,
+        outgoing: Receiver<'static, CriticalSectionRawMutex, RemoteRequest, 64>,
+        incoming: Sender<'static, CriticalSectionRawMutex, DroneResponse, 64>,
+    ) {
+        common_esp::communicate(wifi, outgoing, incoming).await
+    }
     loop {
         let result = select(ticker.next(), drone_responses.receive()).await;
 
@@ -81,8 +93,7 @@ async fn main(spawner: Spawner) -> ! {
             if last_ping_sent.replace(Instant::now()).is_some() {
                 warn!("Connection lost!");
             }
-            *remote_requests.send().await = RemoteRequest::Ping;
-            remote_requests.send_done();
+            remote_requests.send(RemoteRequest::Ping).await;
             continue;
         };
 
@@ -102,16 +113,14 @@ async fn main(spawner: Spawner) -> ! {
                 error!("Unexpected response: {}", drone_res);
             }
         }
-
-        drone_responses.receive_done();
     }
 }
 
 #[embassy_executor::task]
 async fn esp_now_communicate(
     wifi: WIFI<'static>,
-    outgoing: Receiver<'static, NoopRawMutex, RemoteRequest>,
-    incoming: Sender<'static, NoopRawMutex, DroneResponse>,
+    outgoing: Receiver<'static, CriticalSectionRawMutex, RemoteRequest, 64>,
+    incoming: Sender<'static, CriticalSectionRawMutex, DroneResponse, 64>,
 ) {
     common_esp::communicate(wifi, outgoing, incoming).await
 }
