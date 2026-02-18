@@ -1,0 +1,22 @@
+<sdf version="1.8">
+  <world name="empty_world">
+
+    <!-- Physik -->
+    <physics name="1ms" type="ignored">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+
+    <!-- Licht -->
+    <include>
+      <uri>model://sun</uri>
+    </include>
+
+    <!-- Boden -->
+    <include>
+      <uri>model://ground_plane</uri>
+    </include>
+
+  </world>
+</sdf>
+
