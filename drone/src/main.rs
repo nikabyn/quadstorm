@@ -7,6 +7,7 @@
 )]
 
 extern crate alloc;
+use alloc::boxed::Box;
 use esp_backtrace as _;
 
 use alloc::format;
@@ -21,6 +22,7 @@ use esp_hal::timer::timg::TimerGroup;
 
 use common_esp::{mpmc_channel, spsc_channel};
 use common_messages::{DroneResponse, RemoteRequest};
+use drone::defmt::defmt_data_to_drone_responses;
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
@@ -42,6 +44,8 @@ async fn main(spawner: Spawner) -> ! {
     let (remote_reqests, drone_responses) = {
         let drone = mpmc_channel!(DroneResponse, 64);
         let remote = mpmc_channel!(RemoteRequest, 64);
+
+        spawner.must_spawn(defmt_data_to_drone_responses(drone.sender()));
 
         spawner.must_spawn(esp_now_communicate(
             peripherals.WIFI,
@@ -86,6 +90,9 @@ async fn main(spawner: Spawner) -> ! {
             match remote_req {
                 RemoteRequest::Ping => {
                     drone_responses.send(DroneResponse::Pong).await;
+                    drone_responses
+                        .send(DroneResponse::Log(Box::from([])))
+                        .await;
                 }
                 _ => todo!(),
             }

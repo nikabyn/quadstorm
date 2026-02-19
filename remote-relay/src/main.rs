@@ -74,6 +74,7 @@ async fn main(spawner: Spawner) -> ! {
             drone.sender(),
         ));
         spawner.must_spawn(rtt_communicate(
+            channels.up.1,
             channels.up.2,
             channels.down.0,
             remote.sender(),
@@ -121,8 +122,9 @@ async fn esp_now_communicate(
 
 #[embassy_executor::task]
 async fn rtt_communicate(
-    mut upchannel: rtt_target::UpChannel,
-    mut downchannel: rtt_target::DownChannel,
+    mut drone_logs: rtt_target::UpChannel,
+    mut msgs_up: rtt_target::UpChannel,
+    mut msgs_down: rtt_target::DownChannel,
     outgoing: Sender<'static, CriticalSectionRawMutex, RemoteRequest, 64>,
     incoming: Receiver<'static, CriticalSectionRawMutex, DroneResponse, 64>,
 ) {
@@ -130,7 +132,7 @@ async fn rtt_communicate(
 
     loop {
         // Relay outgoing requests to drone
-        req_decoder.receive(|buffer| downchannel.read(buffer));
+        req_decoder.receive(|buffer| msgs_down.read(buffer));
         for req in &mut req_decoder {
             info!("Relaying(to drone): {}", &req);
             outgoing.send(req).await;
@@ -138,8 +140,12 @@ async fn rtt_communicate(
 
         // Relay incoming responses to remote
         while let Ok(res) = incoming.try_receive() {
-            info!("Relaying(to remote): {}", res);
-            upchannel.write(&Frame::encode(&res).unwrap());
+            if let DroneResponse::Log(defmt_data) = res {
+                drone_logs.write(&defmt_data);
+            } else {
+                info!("Relaying(to remote): {}", res);
+                msgs_up.write(&Frame::encode(&res).unwrap());
+            }
         }
 
         embassy_futures::yield_now().await;

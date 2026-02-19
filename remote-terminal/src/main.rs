@@ -93,7 +93,7 @@ impl<'a> App<'a> {
         let Some(relay_elf_path) = args.next() else {
             return Err(anyhow!("Expected path to relay elf as first argument"));
         };
-        let Some(drone_elf_path) = std::env::args().skip(1).next() else {
+        let Some(drone_elf_path) = args.next() else {
             return Err(anyhow!("Expected path to drone elf as second argument"));
         };
         let relay_elf = std::fs::read(relay_elf_path)?;
@@ -144,7 +144,7 @@ impl<'a> App<'a> {
                     let data = rtt_state.receive(1).unwrap();
                     drone_logs_decoder.received(&data);
                     defmt_decode(
-                        relay_logs_decoder.as_mut(),
+                        drone_logs_decoder.as_mut(),
                         &drone_table,
                         LogsTab::Drone,
                         tx_logs.clone(),

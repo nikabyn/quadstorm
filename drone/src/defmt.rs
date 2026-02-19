@@ -1,7 +1,13 @@
 use core::cell::LazyCell;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use embassy_sync::zerocopy_channel;
+extern crate alloc;
+use alloc::boxed::Box;
+
+use common_messages::DroneResponse;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::channel::Sender;
+use embassy_sync::pipe::Pipe;
 use rtt_target::{UpChannel, rtt_init};
 
 #[defmt::global_logger]
@@ -9,7 +15,6 @@ struct Logger;
 
 struct Encoder {
     rtt_channel: LazyCell<UpChannel>,
-    drone_res: zerocopy_channel::Sender,
     defmt_encoder: defmt::Encoder,
 }
 
@@ -37,25 +42,40 @@ impl Encoder {
     fn start_frame(&mut self) {
         self.defmt_encoder.start_frame(|bytes| {
             self.rtt_channel.write(bytes);
-            // TODO Send log frame
+            DEFMT_DATA.try_write(bytes).unwrap();
         });
     }
 
     fn end_frame(&mut self) {
         self.defmt_encoder.end_frame(|bytes| {
             self.rtt_channel.write(bytes);
-            // TODO Send log frame
+            DEFMT_DATA.try_write(bytes).unwrap();
         });
     }
 
     fn write(&mut self, data: &[u8]) {
         self.defmt_encoder.write(data, |bytes| {
             self.rtt_channel.write(bytes);
-            // TODO Send log frame
+            DEFMT_DATA.try_write(bytes).unwrap();
         });
     }
 }
 
+#[embassy_executor::task]
+pub async fn defmt_data_to_drone_responses(
+    drone_res: Sender<'static, CriticalSectionRawMutex, DroneResponse, 64>,
+) {
+    let mut buffer = [0; 1024];
+    loop {
+        let len = DEFMT_DATA.read(&mut buffer).await;
+        drone_res
+            .send(DroneResponse::Log(Box::from(&buffer[..len])))
+            .await;
+        embassy_futures::yield_now().await;
+    }
+}
+
+static DEFMT_DATA: Pipe<CriticalSectionRawMutex, 1024> = Pipe::new();
 static TAKEN: AtomicBool = AtomicBool::new(false);
 static mut CS_RESTORE: critical_section::RestoreState = critical_section::RestoreState::invalid();
 static mut ENCODER: Encoder = Encoder::new();
