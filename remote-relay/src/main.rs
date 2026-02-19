@@ -85,17 +85,12 @@ async fn main(spawner: Spawner) -> ! {
     };
 
     let mut ticker = Ticker::every(Duration::from_millis(2000));
-    let mut last_ping_sent = None;
+    // let mut last_ping_sent = None;
 
     loop {
         let result = ticker.next().await;
 
-        // TODO: Fix pings
-        if last_ping_sent.replace(Instant::now()).is_some() {
-            warn!("Connection lost!");
-        }
-        remote_requests.send(RemoteRequest::Ping).await;
-        continue;
+        // TODO: Do extra pings?
 
         // match drone_res {
         //     DroneResponse::Pong => {

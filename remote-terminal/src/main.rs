@@ -28,7 +28,9 @@ fn main() -> Result<()> {
     app_result
 }
 
+#[derive(Clone, Copy)]
 enum LogsTab {
+    Remote,
     Relay,
     Drone,
 }
@@ -36,6 +38,7 @@ enum LogsTab {
 impl Display for LogsTab {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
+            Self::Remote => "Remote",
             Self::Relay => "Relay",
             Self::Drone => "Drone",
         })
@@ -44,16 +47,18 @@ impl Display for LogsTab {
 
 struct App<'a> {
     active_logs_tab: LogsTab,
-    log_lines_drone: Vec<Line<'a>>,
+    log_lines_remote: Vec<Line<'a>>,
     log_lines_relay: Vec<Line<'a>>,
+    log_lines_drone: Vec<Line<'a>>,
 }
 
 impl<'a> App<'a> {
     fn new() -> Self {
         Self {
-            active_logs_tab: LogsTab::Drone,
-            log_lines_drone: Vec::new(),
+            active_logs_tab: LogsTab::Remote,
+            log_lines_remote: Vec::new(),
             log_lines_relay: Vec::new(),
+            log_lines_drone: Vec::new(),
         }
     }
 
@@ -70,8 +75,9 @@ impl<'a> App<'a> {
         let log_block = Block::bordered().title(self.active_logs_tab.to_string());
         let num_lines = log_block.inner(logging).height;
         let log_lines: Vec<_> = match self.active_logs_tab {
-            LogsTab::Drone => &self.log_lines_drone,
+            LogsTab::Remote => &self.log_lines_remote,
             LogsTab::Relay => &self.log_lines_relay,
+            LogsTab::Drone => &self.log_lines_drone,
         }
         .iter()
         .rev()
@@ -92,8 +98,7 @@ impl<'a> App<'a> {
 
         let mut rtt_state = RttState::new(&elf)?;
 
-        let (tx_logs_relay, rx_logs_relay) = mpsc::channel::<Line>();
-        let (tx_logs_drone, rx_logs_drone) = mpsc::channel::<Line>();
+        let (tx_logs, rx_logs) = mpsc::channel::<(LogsTab, Line)>();
         let (tx_drone_res, rx_drone_res) = mpsc::channel::<DroneResponse>();
         let (tx_remote_req, rx_remote_req) = mpsc::channel::<RemoteRequest>();
 
@@ -108,8 +113,11 @@ impl<'a> App<'a> {
 
                     let downchannel = rtt.down_channel(0).unwrap();
                     for req in rx_remote_req.try_iter() {
-                        tx_logs_drone
-                            .send(Line::from(format!("sending {:?} to relay", req)))
+                        tx_logs
+                            .send((
+                                LogsTab::Remote,
+                                Line::from(format!("sending {:?} to relay", req)),
+                            ))
                             .unwrap();
                         downchannel
                             .write(core, &common_messages::encode(&req).unwrap())
@@ -119,7 +127,7 @@ impl<'a> App<'a> {
                     // Relay logs
                     let data = receive(0, core, rtt).unwrap();
                     decoder.received(&data);
-                    decode(decoder.as_mut(), &table, tx_logs_relay.clone()).unwrap();
+                    decode(decoder.as_mut(), &table, LogsTab::Relay, tx_logs.clone()).unwrap();
 
                     // TODO: Drone logs
 
@@ -130,19 +138,13 @@ impl<'a> App<'a> {
                             Ok(res) => tx_drone_res.send(res).unwrap(),
                             Err(_) => {}
                         };
-                        tx_logs_drone
-                            .send(Line::from(format!("{:?}", data)))
+                        tx_logs
+                            .send((LogsTab::Remote, Line::from(format!("{:?}", data))))
                             .unwrap();
                     }
                 }
             });
-            self.run(
-                terminal,
-                rx_drone_res,
-                tx_remote_req,
-                rx_logs_relay,
-                rx_logs_drone,
-            )
+            self.run(terminal, rx_drone_res, tx_remote_req, rx_logs)
         })
     }
 
@@ -151,25 +153,24 @@ impl<'a> App<'a> {
         mut terminal: DefaultTerminal,
         drone_res: mpsc::Receiver<DroneResponse>,
         remote_req: mpsc::Sender<RemoteRequest>,
-        logs_relay: mpsc::Receiver<Line<'a>>,
-        logs_drone: mpsc::Receiver<Line<'a>>,
+        logs: mpsc::Receiver<(LogsTab, Line<'a>)>,
     ) -> Result<()> {
         let tick_rate = Duration::from_millis(5);
 
         loop {
-            match logs_drone.try_recv() {
-                Ok(line) => self.log_lines_drone.push(line),
-                Err(TryRecvError::Disconnected) => break,
-                Err(TryRecvError::Empty) => {}
-            }
-            match logs_relay.try_recv() {
-                Ok(line) => self.log_lines_relay.push(line),
+            match logs.try_recv() {
+                Ok((tab, line)) => match tab {
+                    LogsTab::Remote => &mut self.log_lines_remote,
+                    LogsTab::Relay => &mut self.log_lines_relay,
+                    LogsTab::Drone => &mut self.log_lines_drone,
+                }
+                .push(line),
                 Err(TryRecvError::Disconnected) => break,
                 Err(TryRecvError::Empty) => {}
             }
             match drone_res.try_recv() {
                 Ok(res) => self
-                    .log_lines_relay
+                    .log_lines_remote
                     .push(Line::from(format!("received drone stuff: {res:?}"))),
                 Err(TryRecvError::Disconnected) => break,
                 Err(TryRecvError::Empty) => {}
@@ -180,14 +181,15 @@ impl<'a> App<'a> {
             if event::poll(tick_rate)? {
                 if let Event::Key(key) = event::read()? {
                     match key.code {
-                        KeyCode::Char('1') => self.active_logs_tab = LogsTab::Drone,
+                        KeyCode::Char('1') => self.active_logs_tab = LogsTab::Remote,
                         KeyCode::Char('2') => self.active_logs_tab = LogsTab::Relay,
+                        KeyCode::Char('3') => self.active_logs_tab = LogsTab::Drone,
                         KeyCode::Char('w') => {}
                         KeyCode::Char('a') => {}
                         KeyCode::Char('s') => {}
                         KeyCode::Char('d') => {}
                         KeyCode::Char('p') => {
-                            self.log_lines_drone.push(Line::from("Pressed p"));
+                            self.log_lines_remote.push(Line::from("Pressed p"));
                             remote_req.send(RemoteRequest::Ping).unwrap()
                         }
                         KeyCode::Up => {}
@@ -236,7 +238,8 @@ fn receive(number: usize, core: &mut Core<'_>, rtt: &mut Rtt) -> Result<Box<[u8]
 fn decode(
     decoder: &mut dyn defmt_decoder::StreamDecoder,
     table: &defmt_decoder::Table,
-    tx: mpsc::Sender<Line>,
+    tab: LogsTab,
+    tx: mpsc::Sender<(LogsTab, Line)>,
 ) -> Result<()> {
     loop {
         match decoder.decode() {
@@ -266,7 +269,7 @@ fn decode(
                 let message = Span::raw(frame.display_message().to_string());
                 line.push_span(message);
 
-                tx.send(line).unwrap();
+                tx.send((tab, line)).unwrap();
             }
             Err(DecodeError::Malformed) if table.encoding().can_recover() => {
                 // If recovery is possible, skip the current frame and continue with new data.
