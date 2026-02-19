@@ -1,19 +1,17 @@
-use std::fmt::{Display, format};
+use std::fmt::Display;
 use std::sync::mpsc;
 use std::sync::mpsc::TryRecvError;
 use std::thread;
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
-use common_messages::{DroneResponse, RemoteRequest};
+use common_messages::{DroneResponse, Frame, FrameStreamDecoder, RemoteRequest};
 use defmt_decoder::DecodeError;
 use defmt_parser::Level;
-use probe_rs::Core;
 use probe_rs::{
     Permissions, Session, probe::list::Lister, rtt::Rtt, rtt::find_rtt_control_block_in_raw_file,
 };
 use ratatui::DefaultTerminal;
-use ratatui::Frame;
 use ratatui::crossterm::event::{self, Event, KeyCode};
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::Style;
@@ -62,7 +60,7 @@ impl<'a> App<'a> {
         }
     }
 
-    fn draw(&self, frame: &mut Frame) {
+    fn draw(&self, frame: &mut ratatui::Frame) {
         let layout = Layout::new(
             Direction::Horizontal,
             [Constraint::Length(40), Constraint::Fill(1)],
@@ -91,12 +89,17 @@ impl<'a> App<'a> {
     }
 
     fn start(self, terminal: DefaultTerminal) -> Result<()> {
-        let Some(elf_path) = std::env::args().skip(1).next() else {
-            return Err(anyhow!("Expected path to elf as first argument"));
+        let mut args = std::env::args().skip(1);
+        let Some(relay_elf_path) = args.next() else {
+            return Err(anyhow!("Expected path to relay elf as first argument"));
         };
-        let elf = std::fs::read(elf_path)?;
+        let Some(drone_elf_path) = std::env::args().skip(1).next() else {
+            return Err(anyhow!("Expected path to drone elf as second argument"));
+        };
+        let relay_elf = std::fs::read(relay_elf_path)?;
+        let drone_elf = std::fs::read(drone_elf_path)?;
 
-        let mut rtt_state = RttState::new(&elf)?;
+        let mut rtt_state = RttState::new(&relay_elf)?;
 
         let (tx_logs, rx_logs) = mpsc::channel::<(LogsTab, Line)>();
         let (tx_drone_res, rx_drone_res) = mpsc::channel::<DroneResponse>();
@@ -104,43 +107,61 @@ impl<'a> App<'a> {
 
         thread::scope(|s| {
             s.spawn(move || {
-                let table = defmt_decoder::Table::parse(&elf).unwrap().unwrap();
-                let mut decoder = table.new_stream_decoder();
+                let relay_table = defmt_decoder::Table::parse(&relay_elf).unwrap().unwrap();
+                let mut relay_logs_decoder = relay_table.new_stream_decoder();
 
-                loop {
-                    let core = &mut rtt_state.session.core(0).unwrap();
-                    let rtt = &mut rtt_state.rtt;
+                let drone_table = defmt_decoder::Table::parse(&drone_elf).unwrap().unwrap();
+                let mut drone_logs_decoder = drone_table.new_stream_decoder();
 
-                    let downchannel = rtt.down_channel(0).unwrap();
-                    for req in rx_remote_req.try_iter() {
-                        tx_logs
-                            .send((
-                                LogsTab::Remote,
-                                Line::from(format!("sending {:?} to relay", req)),
-                            ))
-                            .unwrap();
-                        downchannel
-                            .write(core, &common_messages::encode(&req).unwrap())
-                            .unwrap();
-                    }
+                let mut drone_res_decoder = FrameStreamDecoder::<DroneResponse>::new();
 
-                    // Relay logs
-                    let data = receive(0, core, rtt).unwrap();
-                    decoder.received(&data);
-                    decode(decoder.as_mut(), &table, LogsTab::Relay, tx_logs.clone()).unwrap();
-
-                    // TODO: Drone logs
-
-                    // Drone responses
-                    let data = receive(2, core, rtt).unwrap();
-                    if !data.is_empty() {
-                        match common_messages::decode(&data) {
-                            Ok(res) => tx_drone_res.send(res).unwrap(),
-                            Err(_) => {}
+                'thread: loop {
+                    // Send remote requests
+                    'remote_req: loop {
+                        let req = match rx_remote_req.try_recv() {
+                            Ok(req) => req,
+                            Err(TryRecvError::Empty) => break 'remote_req,
+                            Err(TryRecvError::Disconnected) => break 'thread,
                         };
                         tx_logs
-                            .send((LogsTab::Remote, Line::from(format!("{:?}", data))))
+                            .send((LogsTab::Remote, Line::from(format!("Sending: {:?}", req))))
                             .unwrap();
+                        rtt_state.send(0, &Frame::encode(&req).unwrap()).unwrap();
+                    }
+
+                    // Receive, decode relay logs
+                    let data = rtt_state.receive(0).unwrap();
+                    relay_logs_decoder.received(&data);
+                    defmt_decode(
+                        relay_logs_decoder.as_mut(),
+                        &relay_table,
+                        LogsTab::Relay,
+                        tx_logs.clone(),
+                    )
+                    .unwrap();
+
+                    // Receive, decode drone logs
+                    let data = rtt_state.receive(1).unwrap();
+                    drone_logs_decoder.received(&data);
+                    defmt_decode(
+                        relay_logs_decoder.as_mut(),
+                        &drone_table,
+                        LogsTab::Drone,
+                        tx_logs.clone(),
+                    )
+                    .unwrap();
+
+                    // Receive, decode drone responses
+                    let data = rtt_state.receive(2).unwrap();
+                    drone_res_decoder.receive(|buffer| {
+                        let len = data.len().min(buffer.len());
+                        buffer[..len].copy_from_slice(&data[..len]);
+                        len
+                    });
+                    for res in &mut drone_res_decoder {
+                        let Ok(..) = tx_drone_res.send(res) else {
+                            break 'thread;
+                        };
                     }
                 }
             });
@@ -171,7 +192,7 @@ impl<'a> App<'a> {
             match drone_res.try_recv() {
                 Ok(res) => self
                     .log_lines_remote
-                    .push(Line::from(format!("received drone stuff: {res:?}"))),
+                    .push(Line::from(format!("Received: {res:?}"))),
                 Err(TryRecvError::Disconnected) => break,
                 Err(TryRecvError::Empty) => {}
             }
@@ -180,6 +201,8 @@ impl<'a> App<'a> {
 
             if event::poll(tick_rate)? {
                 if let Event::Key(key) = event::read()? {
+                    self.log_lines_remote
+                        .push(Line::from(format!("Pressed <{}>", key.code.to_string())));
                     match key.code {
                         KeyCode::Char('1') => self.active_logs_tab = LogsTab::Remote,
                         KeyCode::Char('2') => self.active_logs_tab = LogsTab::Relay,
@@ -188,10 +211,7 @@ impl<'a> App<'a> {
                         KeyCode::Char('a') => {}
                         KeyCode::Char('s') => {}
                         KeyCode::Char('d') => {}
-                        KeyCode::Char('p') => {
-                            self.log_lines_remote.push(Line::from("Pressed p"));
-                            remote_req.send(RemoteRequest::Ping).unwrap()
-                        }
+                        KeyCode::Char('p') => remote_req.send(RemoteRequest::Ping)?,
                         KeyCode::Up => {}
                         KeyCode::Down => {}
                         KeyCode::Esc | KeyCode::Char('q') => break,
@@ -223,19 +243,29 @@ impl RttState {
 
         Ok(Self { session, rtt })
     }
+
+    fn receive(&mut self, upchannel: usize) -> Result<Box<[u8]>> {
+        let Some(input) = self.rtt.up_channel(upchannel) else {
+            return Err(anyhow!("Channel {} does not exist", upchannel));
+        };
+        let mut buffer = vec![0; input.buffer_size()];
+        let len = input.read(&mut self.session.core(0)?, &mut buffer)?;
+        buffer.truncate(len);
+        Ok(buffer.into_boxed_slice())
+    }
+
+    fn send(&mut self, downchannel: usize, buffer: &[u8]) -> Result<()> {
+        let core = &mut self.session.core(0)?;
+        let downchannel = self.rtt.down_channel(downchannel).unwrap();
+        let mut written = 0;
+        while written != buffer.len() {
+            written += downchannel.write(core, buffer)?;
+        }
+        Ok(())
+    }
 }
 
-fn receive(number: usize, core: &mut Core<'_>, rtt: &mut Rtt) -> Result<Box<[u8]>> {
-    let Some(input) = rtt.up_channel(number) else {
-        return Err(anyhow!("Channel {} does not exist", number));
-    };
-    let mut buffer = vec![0; input.buffer_size()];
-    let len = input.read(core, &mut buffer).unwrap();
-    buffer.truncate(len);
-    Ok(buffer.into_boxed_slice())
-}
-
-fn decode(
+fn defmt_decode(
     decoder: &mut dyn defmt_decoder::StreamDecoder,
     table: &defmt_decoder::Table,
     tab: LogsTab,

@@ -11,19 +11,18 @@ use esp_alloc as _;
 use esp_backtrace as _;
 use esp_println as _;
 
-use defmt::{error, info, warn};
+use defmt::info;
 use embassy_executor::Spawner;
-use embassy_futures::select::{Either, select};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::{Receiver, Sender};
-use embassy_time::{Duration, Instant, Ticker};
+use embassy_time::{Duration, Ticker};
 use esp_hal::peripherals::{Peripherals, SW_INTERRUPT, TIMG0};
 use esp_hal::timer::timg::TimerGroup;
 use esp_hal::{clock::CpuClock, peripherals::WIFI};
 use rtt_target::{rtt_init, set_defmt_channel};
 
 use common_esp::mpmc_channel;
-use common_messages::{DecodeError, DroneResponse, RemoteRequest};
+use common_messages::{DroneResponse, Frame, FrameStreamDecoder, RemoteRequest};
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
@@ -65,7 +64,7 @@ async fn main(spawner: Spawner) -> ! {
     init_rtos(peripherals.TIMG0, peripherals.SW_INTERRUPT).await;
     info!("Embassy initialized!");
 
-    let (drone_responses, remote_requests) = {
+    let (_drone_responses, _remote_requests) = {
         let remote = mpmc_channel!(RemoteRequest, 64);
         let drone = mpmc_channel!(DroneResponse, 64);
 
@@ -88,7 +87,7 @@ async fn main(spawner: Spawner) -> ! {
     // let mut last_ping_sent = None;
 
     loop {
-        let result = ticker.next().await;
+        let _result = ticker.next().await;
 
         // TODO: Do extra pings?
 
@@ -127,72 +126,20 @@ async fn rtt_communicate(
     outgoing: Sender<'static, CriticalSectionRawMutex, RemoteRequest, 64>,
     incoming: Receiver<'static, CriticalSectionRawMutex, DroneResponse, 64>,
 ) {
-    let mut buffer = [0u8; 1024];
-    let mut buffer_len = 0;
+    let mut req_decoder = FrameStreamDecoder::<RemoteRequest>::new();
 
     loop {
-        // Read from downchannel into remaining buffer space
-        if buffer_len < buffer.len() {
-            let read_len = downchannel.read(&mut buffer[buffer_len..]);
-            buffer_len += read_len;
-            if read_len > 0 {
-                info!("received: {:?}", buffer[..buffer_len]);
-            }
-        }
-
-        // Relay all complete frames in the buffer to drone
-        let mut processed_up_to = 0;
-        loop {
-            let Some(start) = buffer[processed_up_to..buffer_len]
-                .iter()
-                .position(|&b| b == 0x00)
-            else {
-                // Not a frame, discard data
-                buffer_len = 0;
-                processed_up_to = 0;
-                break;
-            };
-            let frame_start = processed_up_to + start;
-
-            let Some(end) = buffer[frame_start..buffer_len]
-                .iter()
-                .position(|&b| b == 0xff)
-            else {
-                // Incomplete frame, wait for more data
-                break;
-            };
-
-            let frame_end = frame_start + end;
-            let frame = &buffer[frame_start..=frame_end];
-
-            match common_messages::decode::<RemoteRequest>(frame) {
-                Ok(req) => {
-                    info!("Relaying(to drone): {}", &req);
-                    outgoing.send(req).await;
-                }
-                Err(DecodeError::Corrupted) => {
-                    info!("Corrupted frame discarded");
-                }
-                Err(DecodeError::Incomplete) => {
-                    // Incomplete frame, wait for more data
-                    break;
-                }
-            }
-
-            // Move past current frame
-            processed_up_to = frame_end + 1;
-        }
-
-        // Shift remaining data to start of buffer
-        if processed_up_to > 0 {
-            buffer.copy_within(processed_up_to..buffer_len, 0);
-            buffer_len -= processed_up_to;
+        // Relay outgoing requests to drone
+        req_decoder.receive(|buffer| downchannel.read(buffer));
+        for req in &mut req_decoder {
+            info!("Relaying(to drone): {}", &req);
+            outgoing.send(req).await;
         }
 
         // Relay incoming responses to remote
         while let Ok(res) = incoming.try_receive() {
             info!("Relaying(to remote): {}", res);
-            upchannel.write(&common_messages::encode(&res).unwrap());
+            upchannel.write(&Frame::encode(&res).unwrap());
         }
 
         embassy_futures::yield_now().await;
