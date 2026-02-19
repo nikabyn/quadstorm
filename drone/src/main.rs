@@ -7,7 +7,6 @@
 )]
 
 extern crate alloc;
-use defmt_rtt as _;
 use esp_backtrace as _;
 
 use alloc::format;

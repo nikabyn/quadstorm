@@ -43,7 +43,7 @@ esp-rtos = { version = "0.2.0", features = [
   "esp-radio",
   "esp32c6",
 ] }
-rtt-target = { version = "0.6.2", features = ["defmt"] }
+rtt-target = { version = "0.6.2" }
 static_cell = { version = "2.1.1" }
 thiserror = { version = "2.0.17", default-features = false }
 wincode = { version = "0.2.5", default-features = false, features = [

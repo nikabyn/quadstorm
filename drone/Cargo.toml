@@ -26,8 +26,8 @@ test = false
 base64 = { version = "0.22.1", default-features = false }
 common-esp = { workspace = true }
 common-messages = { workspace = true }
+critical-section = "1.2.0"
 defmt = { workspace = true }
-defmt-rtt = { workspace = true }
 embassy-executor = { workspace = true }
 embassy-futures = { workspace = true }
 embassy-sync = { workspace = true }
@@ -39,5 +39,6 @@ esp-hal = { workspace = true, features = ["unstable"] }
 esp-println = { workspace = true }
 esp-radio = { workspace = true }
 esp-rtos = { workspace = true }
+rtt-target = { workspace = true }
 static_cell = { workspace = true }
 thiserror = { workspace = true }

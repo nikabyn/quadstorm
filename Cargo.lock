@@ -725,16 +725,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "defmt-rtt"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "93d5a25c99d89c40f5676bec8cefe0614f17f0f40e916f98e345dae941807f9e"
-dependencies = [
- "critical-section",
- "defmt 1.0.1",
-]
-
-[[package]]
 name = "deku"
 version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -859,8 +849,8 @@ dependencies = [
  "base64 0.22.1",
  "common-esp",
  "common-messages",
+ "critical-section",
  "defmt 1.0.1",
- "defmt-rtt",
  "embassy-executor",
  "embassy-futures",
  "embassy-sync 0.7.2",
@@ -872,6 +862,7 @@ dependencies = [
  "esp-println",
  "esp-radio",
  "esp-rtos",
+ "rtt-target",
  "static_cell",
  "thiserror 2.0.18",
 ]
