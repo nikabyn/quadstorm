@@ -119,7 +119,7 @@ macro_rules! spsc_channel {
 }
 
 #[macro_export]
-macro_rules! mpsc_channel {
+macro_rules! mpmc_channel {
     ($t:ty, $size:expr) => {{
         use core::mem::MaybeUninit;
         use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;

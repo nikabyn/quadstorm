@@ -1,4 +1,4 @@
-use std::fmt::Display;
+use std::fmt::{Display, format};
 use std::sync::mpsc;
 use std::sync::mpsc::TryRecvError;
 use std::thread;
@@ -28,12 +28,12 @@ fn main() -> Result<()> {
     app_result
 }
 
-enum LogginTab {
+enum LogsTab {
     Relay,
     Drone,
 }
 
-impl Display for LogginTab {
+impl Display for LogsTab {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::Relay => "Relay",
@@ -43,15 +43,17 @@ impl Display for LogginTab {
 }
 
 struct App<'a> {
-    logging_lines: Vec<Line<'a>>,
-    logging_tab: LogginTab,
+    active_logs_tab: LogsTab,
+    log_lines_drone: Vec<Line<'a>>,
+    log_lines_relay: Vec<Line<'a>>,
 }
 
 impl<'a> App<'a> {
     fn new() -> Self {
         Self {
-            logging_lines: Vec::new(),
-            logging_tab: LogginTab::Drone,
+            active_logs_tab: LogsTab::Drone,
+            log_lines_drone: Vec::new(),
+            log_lines_relay: Vec::new(),
         }
     }
 
@@ -65,17 +67,19 @@ impl<'a> App<'a> {
         let line = Line::from("wasd");
         frame.render_widget(line, controls);
 
-        let logging_block = Block::bordered().title(self.logging_tab.to_string());
-        let num_lines = logging_block.inner(logging).height;
-        let logging_lines: Vec<_> = self
-            .logging_lines
-            .iter()
-            .rev()
-            .take(num_lines as usize)
-            .rev()
-            .cloned()
-            .collect();
-        let logging_view = Paragraph::new(logging_lines).block(logging_block);
+        let log_block = Block::bordered().title(self.active_logs_tab.to_string());
+        let num_lines = log_block.inner(logging).height;
+        let log_lines: Vec<_> = match self.active_logs_tab {
+            LogsTab::Drone => &self.log_lines_drone,
+            LogsTab::Relay => &self.log_lines_relay,
+        }
+        .iter()
+        .rev()
+        .take(num_lines as usize)
+        .rev()
+        .cloned()
+        .collect();
+        let logging_view = Paragraph::new(log_lines).block(log_block);
 
         frame.render_widget(logging_view, logging);
     }
@@ -90,8 +94,8 @@ impl<'a> App<'a> {
 
         let (tx_logs_relay, rx_logs_relay) = mpsc::channel::<Line>();
         let (tx_logs_drone, rx_logs_drone) = mpsc::channel::<Line>();
-        let (tx_drone_res, rx_drone_res) = mpsc::channel::<RemoteRequest>();
-        let (tx_remote_req, rx_remote_req) = mpsc::channel::<DroneResponse>();
+        let (tx_drone_res, rx_drone_res) = mpsc::channel::<DroneResponse>();
+        let (tx_remote_req, rx_remote_req) = mpsc::channel::<RemoteRequest>();
 
         thread::scope(|s| {
             s.spawn(move || {
@@ -101,25 +105,72 @@ impl<'a> App<'a> {
                 loop {
                     let core = &mut rtt_state.session.core(0).unwrap();
                     let rtt = &mut rtt_state.rtt;
-                    receive(0, core, rtt, decoder.as_mut()).unwrap();
+
+                    let downchannel = rtt.down_channel(0).unwrap();
+                    for req in rx_remote_req.try_iter() {
+                        tx_logs_drone
+                            .send(Line::from(format!("sending {:?} to relay", req)))
+                            .unwrap();
+                        downchannel
+                            .write(core, &common_messages::encode(&req).unwrap())
+                            .unwrap();
+                    }
+
+                    // Relay logs
+                    let data = receive(0, core, rtt).unwrap();
+                    decoder.received(&data);
                     decode(decoder.as_mut(), &table, tx_logs_relay.clone()).unwrap();
+
+                    // TODO: Drone logs
+
+                    // Drone responses
+                    let data = receive(2, core, rtt).unwrap();
+                    if !data.is_empty() {
+                        match common_messages::decode(&data) {
+                            Ok(res) => tx_drone_res.send(res).unwrap(),
+                            Err(_) => {}
+                        };
+                        tx_logs_drone
+                            .send(Line::from(format!("{:?}", data)))
+                            .unwrap();
+                    }
                 }
             });
-            self.run(terminal, rx_logs_relay, rx_logs_drone)
+            self.run(
+                terminal,
+                rx_drone_res,
+                tx_remote_req,
+                rx_logs_relay,
+                rx_logs_drone,
+            )
         })
     }
 
     fn run(
         mut self,
         mut terminal: DefaultTerminal,
+        drone_res: mpsc::Receiver<DroneResponse>,
+        remote_req: mpsc::Sender<RemoteRequest>,
         logs_relay: mpsc::Receiver<Line<'a>>,
         logs_drone: mpsc::Receiver<Line<'a>>,
     ) -> Result<()> {
         let tick_rate = Duration::from_millis(5);
 
         loop {
+            match logs_drone.try_recv() {
+                Ok(line) => self.log_lines_drone.push(line),
+                Err(TryRecvError::Disconnected) => break,
+                Err(TryRecvError::Empty) => {}
+            }
             match logs_relay.try_recv() {
-                Ok(line) => self.logging_lines.push(line),
+                Ok(line) => self.log_lines_relay.push(line),
+                Err(TryRecvError::Disconnected) => break,
+                Err(TryRecvError::Empty) => {}
+            }
+            match drone_res.try_recv() {
+                Ok(res) => self
+                    .log_lines_relay
+                    .push(Line::from(format!("received drone stuff: {res:?}"))),
                 Err(TryRecvError::Disconnected) => break,
                 Err(TryRecvError::Empty) => {}
             }
@@ -129,12 +180,16 @@ impl<'a> App<'a> {
             if event::poll(tick_rate)? {
                 if let Event::Key(key) = event::read()? {
                     match key.code {
-                        KeyCode::Char('1') => self.logging_tab = LogginTab::Drone,
-                        KeyCode::Char('2') => self.logging_tab = LogginTab::Relay,
+                        KeyCode::Char('1') => self.active_logs_tab = LogsTab::Drone,
+                        KeyCode::Char('2') => self.active_logs_tab = LogsTab::Relay,
                         KeyCode::Char('w') => {}
                         KeyCode::Char('a') => {}
                         KeyCode::Char('s') => {}
                         KeyCode::Char('d') => {}
+                        KeyCode::Char('p') => {
+                            self.log_lines_drone.push(Line::from("Pressed p"));
+                            remote_req.send(RemoteRequest::Ping).unwrap()
+                        }
                         KeyCode::Up => {}
                         KeyCode::Down => {}
                         KeyCode::Esc | KeyCode::Char('q') => break,
@@ -168,20 +223,14 @@ impl RttState {
     }
 }
 
-fn receive(
-    number: usize,
-    core: &mut Core<'_>,
-    rtt: &mut Rtt,
-    decoder: &mut dyn defmt_decoder::StreamDecoder,
-) -> Result<()> {
+fn receive(number: usize, core: &mut Core<'_>, rtt: &mut Rtt) -> Result<Box<[u8]>> {
     let Some(input) = rtt.up_channel(number) else {
         return Err(anyhow!("Channel {} does not exist", number));
     };
-    // SAFETY the uninitialized data is never read
-    let mut buffer = unsafe { Box::new_uninit_slice(input.buffer_size()).assume_init() };
-    let count = input.read(core, &mut buffer)?;
-    decoder.received(&buffer[..count]);
-    Ok(())
+    let mut buffer = vec![0; input.buffer_size()];
+    let len = input.read(core, &mut buffer).unwrap();
+    buffer.truncate(len);
+    Ok(buffer.into_boxed_slice())
 }
 
 fn decode(

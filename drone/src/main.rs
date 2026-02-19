@@ -20,7 +20,7 @@ use esp_hal::clock::CpuClock;
 use esp_hal::peripherals::{Peripherals, SW_INTERRUPT, TIMG0, WIFI};
 use esp_hal::timer::timg::TimerGroup;
 
-use common_esp::{mpsc_channel, spsc_channel};
+use common_esp::{mpmc_channel, spsc_channel};
 use common_messages::{DroneResponse, RemoteRequest};
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
@@ -41,8 +41,8 @@ async fn main(spawner: Spawner) -> ! {
 
     // Initialize connection to remote controller
     let (remote_reqests, drone_responses) = {
-        let drone = mpsc_channel!(DroneResponse, 64);
-        let remote = mpsc_channel!(RemoteRequest, 64);
+        let drone = mpmc_channel!(DroneResponse, 64);
+        let remote = mpmc_channel!(RemoteRequest, 64);
 
         spawner.must_spawn(esp_now_communicate(
             peripherals.WIFI,
@@ -98,7 +98,7 @@ async fn main(spawner: Spawner) -> ! {
                 imu_sample.gyro, imu_sample.accl, imu_sample.time
             );
             info!("{}", formatted);
-            drone_responses.send(DroneResponse::Log(formatted)).await;
+            // drone_responses.send(DroneResponse::Log(formatted)).await;
             imu_data.receive_done();
         }
 

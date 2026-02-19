@@ -22,8 +22,8 @@ use esp_hal::timer::timg::TimerGroup;
 use esp_hal::{clock::CpuClock, peripherals::WIFI};
 use rtt_target::{rtt_init, set_defmt_channel};
 
-use common_esp::mpsc_channel;
-use common_messages::{DroneResponse, RemoteRequest};
+use common_esp::mpmc_channel;
+use common_messages::{DecodeError, DroneResponse, RemoteRequest};
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
@@ -66,53 +66,53 @@ async fn main(spawner: Spawner) -> ! {
     info!("Embassy initialized!");
 
     let (drone_responses, remote_requests) = {
-        let remote = mpsc_channel!(RemoteRequest, 64);
-        let drone = mpsc_channel!(DroneResponse, 64);
+        let remote = mpmc_channel!(RemoteRequest, 64);
+        let drone = mpmc_channel!(DroneResponse, 64);
+
         spawner.must_spawn(esp_now_communicate(
             peripherals.WIFI,
             remote.receiver(),
             drone.sender(),
         ));
+        spawner.must_spawn(rtt_communicate(
+            channels.up.2,
+            channels.down.0,
+            remote.sender(),
+            drone.receiver(),
+        ));
+
         (drone.receiver(), remote.sender())
     };
 
     let mut ticker = Ticker::every(Duration::from_millis(2000));
     let mut last_ping_sent = None;
-    #[embassy_executor::task]
-    async fn esp_now_communicate(
-        wifi: WIFI<'static>,
-        outgoing: Receiver<'static, CriticalSectionRawMutex, RemoteRequest, 64>,
-        incoming: Sender<'static, CriticalSectionRawMutex, DroneResponse, 64>,
-    ) {
-        common_esp::communicate(wifi, outgoing, incoming).await
-    }
+
     loop {
-        let result = select(ticker.next(), drone_responses.receive()).await;
+        let result = ticker.next().await;
 
-        let Either::Second(drone_res) = result else {
-            if last_ping_sent.replace(Instant::now()).is_some() {
-                warn!("Connection lost!");
-            }
-            remote_requests.send(RemoteRequest::Ping).await;
-            continue;
-        };
-
-        match drone_res {
-            DroneResponse::Pong => {
-                if let Some(roundtrip_start) = last_ping_sent.take() {
-                    info!(
-                        "Roundtrip time: {}ms",
-                        roundtrip_start.elapsed().as_millis()
-                    );
-                }
-            }
-            DroneResponse::Log(content) => {
-                info!("Log: {}", content);
-            }
-            _ => {
-                error!("Unexpected response: {}", drone_res);
-            }
+        // TODO: Fix pings
+        if last_ping_sent.replace(Instant::now()).is_some() {
+            warn!("Connection lost!");
         }
+        remote_requests.send(RemoteRequest::Ping).await;
+        continue;
+
+        // match drone_res {
+        //     DroneResponse::Pong => {
+        //         if let Some(roundtrip_start) = last_ping_sent.take() {
+        //             info!(
+        //                 "Roundtrip time: {}ms",
+        //                 roundtrip_start.elapsed().as_millis()
+        //             );
+        //         }
+        //     }
+        //     DroneResponse::Log(content) => {
+        //         info!("Log: {}", content);
+        //     }
+        //     _ => {
+        //         error!("Unexpected response: {}", drone_res);
+        //     }
+        // }
     }
 }
 
@@ -123,6 +123,85 @@ async fn esp_now_communicate(
     incoming: Sender<'static, CriticalSectionRawMutex, DroneResponse, 64>,
 ) {
     common_esp::communicate(wifi, outgoing, incoming).await
+}
+
+#[embassy_executor::task]
+async fn rtt_communicate(
+    mut upchannel: rtt_target::UpChannel,
+    mut downchannel: rtt_target::DownChannel,
+    outgoing: Sender<'static, CriticalSectionRawMutex, RemoteRequest, 64>,
+    incoming: Receiver<'static, CriticalSectionRawMutex, DroneResponse, 64>,
+) {
+    let mut buffer = [0u8; 1024];
+    let mut buffer_len = 0;
+
+    loop {
+        // Read from downchannel into remaining buffer space
+        if buffer_len < buffer.len() {
+            let read_len = downchannel.read(&mut buffer[buffer_len..]);
+            buffer_len += read_len;
+            if read_len > 0 {
+                info!("received: {:?}", buffer[..buffer_len]);
+            }
+        }
+
+        // Relay all complete frames in the buffer to drone
+        let mut processed_up_to = 0;
+        loop {
+            let Some(start) = buffer[processed_up_to..buffer_len]
+                .iter()
+                .position(|&b| b == 0x00)
+            else {
+                // Not a frame, discard data
+                buffer_len = 0;
+                processed_up_to = 0;
+                break;
+            };
+            let frame_start = processed_up_to + start;
+
+            let Some(end) = buffer[frame_start..buffer_len]
+                .iter()
+                .position(|&b| b == 0xff)
+            else {
+                // Incomplete frame, wait for more data
+                break;
+            };
+
+            let frame_end = frame_start + end;
+            let frame = &buffer[frame_start..=frame_end];
+
+            match common_messages::decode::<RemoteRequest>(frame) {
+                Ok(req) => {
+                    info!("Relaying(to drone): {}", &req);
+                    outgoing.send(req).await;
+                }
+                Err(DecodeError::Corrupted) => {
+                    info!("Corrupted frame discarded");
+                }
+                Err(DecodeError::Incomplete) => {
+                    // Incomplete frame, wait for more data
+                    break;
+                }
+            }
+
+            // Move past current frame
+            processed_up_to = frame_end + 1;
+        }
+
+        // Shift remaining data to start of buffer
+        if processed_up_to > 0 {
+            buffer.copy_within(processed_up_to..buffer_len, 0);
+            buffer_len -= processed_up_to;
+        }
+
+        // Relay incoming responses to remote
+        while let Ok(res) = incoming.try_receive() {
+            info!("Relaying(to remote): {}", res);
+            upchannel.write(&common_messages::encode(&res).unwrap());
+        }
+
+        embassy_futures::yield_now().await;
+    }
 }
 
 async fn init_esp() -> Peripherals {
