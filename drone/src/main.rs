@@ -13,7 +13,7 @@ use embassy_time::Duration;
 use esp_backtrace as _;
 
 use alloc::format;
-use defmt::{error, info};
+use defmt::{error, info, warn};
 use drone::esp_ikarus::bmi323;
 use embassy_executor::Spawner;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
@@ -34,6 +34,21 @@ esp_bootloader_esp_idf::esp_app_desc!();
 pub fn custom_halt() -> ! {
     esp_hal::system::software_reset()
 }
+
+const MOTOR_FRONT_LEFT_IDX: usize = 1;
+const MOTOR_FRONT_LEFT_REV: bool = true;
+
+const MOTOR_FRONT_RIGHT_IDX: usize = 2;
+const MOTOR_FRONT_RIGHT_REV: bool = false;
+
+const MOTOR_BACK_RIGHT_IDX: usize = 3;
+const MOTOR_BACK_RIGHT_REV: bool = true;
+
+const MOTOR_BACK_LEFT_IDX: usize = 0;
+const MOTOR_BACK_LEFT_REV: bool = false;
+
+const CONTROLLER_STABILIZE_TIME: Duration = Duration::from_secs(2);
+const UNCONFIRMED_ARM_TIME: Duration = Duration::from_millis(500);
 
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
@@ -98,12 +113,17 @@ async fn main(spawner: Spawner) -> ! {
     motors.arm_oneshot().await;
 
     let mut fusion = sensor_fusion::ComplementaryFilterFusion::new(
-        0.95, [0.0; 3], [0.0; 3], [15.0; 3], [0.0; 3], [0.0; 3],
+        0.95, [0.0; 3], [0.0; 3], [25.0; 3], [0.0; 3], [10.0; 3],
     );
 
-    let motors_off_until =
-        embassy_time::Instant::now().saturating_add(embassy_time::Duration::from_secs(2));
+    let motors_off_until = embassy_time::Instant::now().saturating_add(CONTROLLER_STABILIZE_TIME);
     let mut next_report = embassy_time::Instant::now();
+
+    let mut thrust = 0.0;
+    let mut armed_until = None;
+    // let mut thrust = 100.0;
+    // let mut armed_until =
+    //     Some(embassy_time::Instant::now().saturating_add(Duration::from_secs(1000)));
 
     loop {
         let imu_sample = imu_data.receive().await;
@@ -121,19 +141,6 @@ async fn main(spawner: Spawner) -> ! {
             let [roll, pitch, yaw] = fusion.advance(*imu_sample);
             imu_data.receive_done();
 
-            const MOTOR_FRONT_LEFT_IDX: usize = 1;
-            const MOTOR_FRONT_LEFT_REV: bool = true;
-
-            const MOTOR_FRONT_RIGHT_IDX: usize = 2;
-            const MOTOR_FRONT_RIGHT_REV: bool = false;
-
-            const MOTOR_BACK_RIGHT_IDX: usize = 3;
-            const MOTOR_BACK_RIGHT_REV: bool = true;
-
-            const MOTOR_BACK_LEFT_IDX: usize = 0;
-            const MOTOR_BACK_LEFT_REV: bool = false;
-
-            let thrust = 50.0;
             let motor_throttles = [
                 thrust - roll - pitch + yaw,
                 thrust + roll - pitch - yaw,
@@ -171,13 +178,23 @@ async fn main(spawner: Spawner) -> ! {
             if embassy_time::Instant::now() < motors_off_until {
                 // some time to let the controller stabilize
                 motors.send_throttles([1000; 4]).await;
-            } else {
-                motors.send_throttles(mapped_motor_throttles).await;
+            } else if let Some(au) = armed_until {
+                if au > embassy_time::Instant::now() {
+                    motors.send_throttles(mapped_motor_throttles).await;
+                } else {
+                    warn!("arm confirmation ceased");
+                    armed_until = None;
+                }
             }
 
             if embassy_time::Instant::now() >= next_report {
                 // info!("dt: {:?}", dt);
-                info!("ori: {:?}", fusion.orientation());
+                info!(
+                    "ori: {:?}, thrust: {}, armed_until: {:?}",
+                    fusion.orientation(),
+                    thrust,
+                    armed_until,
+                );
                 info!("roll: {}, pitch: {}, yaw: {}", roll, pitch, yaw);
                 info!("throttles: {:?}\n", mapped_motor_throttles);
                 // let formatted = format!(
@@ -198,7 +215,45 @@ async fn main(spawner: Spawner) -> ! {
                 RemoteRequest::Ping => {
                     drone_responses.send(DroneResponse::Pong).await;
                 }
-                _ => todo!(),
+                RemoteRequest::SetArm(true) => {
+                    if thrust != 0.0 {
+                        warn!("drone may not arm when thrust not zero");
+                    } else {
+                        info!("armed");
+                        armed_until =
+                            Some(embassy_time::Instant::now().saturating_add(UNCONFIRMED_ARM_TIME))
+                    }
+
+                    let is_armed = armed_until
+                        .map(|armed_until| embassy_time::Instant::now() < armed_until)
+                        .unwrap_or(false);
+                    drone_responses
+                        .send(DroneResponse::ArmState(is_armed))
+                        .await;
+                }
+                RemoteRequest::SetArm(false) => armed_until = None,
+                RemoteRequest::ArmConfirm => {
+                    if let Some(armed_until) = &mut armed_until {
+                        *armed_until =
+                            embassy_time::Instant::now().saturating_add(UNCONFIRMED_ARM_TIME)
+                    } else {
+                        warn!("tried to arm confirm on unarmed drone");
+                    }
+                }
+                RemoteRequest::SetThrust(new_thrust) => thrust = new_thrust,
+                RemoteRequest::SetTarget(target) => fusion.set_target(target),
+                RemoteRequest::SetTune { kp, ki, kd } => {
+                    fusion.pid[0].k_p = kp[0];
+                    fusion.pid[0].k_i = ki[0];
+                    fusion.pid[0].k_d = kd[0];
+                    fusion.pid[1].k_p = kp[1];
+                    fusion.pid[1].k_i = ki[1];
+                    fusion.pid[1].k_d = kd[1];
+                    fusion.pid[2].k_p = kp[2];
+                    fusion.pid[2].k_i = ki[2];
+                    fusion.pid[2].k_d = kd[2];
+                }
+                _ => warn!("unknown remote request received"),
             }
         }
     }

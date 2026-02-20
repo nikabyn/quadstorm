@@ -7,15 +7,15 @@ type F = f32;
 const IMU_AXIS_MAP: [usize; 3] = [0, 1, 2];
 const IMU_AXIS_SCALE: [F; 3] = [1.0, 1.0, -1.0];
 
-struct Pid {
+pub struct Pid {
     // tune
-    k_p: F,
-    k_i: F,
-    k_d: F,
+    pub k_p: F,
+    pub k_i: F,
+    pub k_d: F,
 
     // state
-    last_input: F,
-    sum: F,
+    pub last_input: F,
+    pub sum: F,
 }
 
 impl Pid {
@@ -40,7 +40,7 @@ pub struct ComplementaryFilterFusion {
     target: [F; 3],
 
     /// roll, pitch and yaw PID contorller
-    pid: [Pid; 3],
+    pub pid: [Pid; 3],
 }
 
 impl ComplementaryFilterFusion {
