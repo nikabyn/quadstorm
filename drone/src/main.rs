@@ -121,24 +121,24 @@ async fn main(spawner: Spawner) -> ! {
             let [roll, pitch, yaw] = fusion.advance(*imu_sample);
             imu_data.receive_done();
 
-            const MOTOR_FRONT_LEFT_IDX: usize = 0;
-            const MOTOR_FRONT_LEFT_REV: bool = false;
+            const MOTOR_FRONT_LEFT_IDX: usize = 1;
+            const MOTOR_FRONT_LEFT_REV: bool = true;
 
-            const MOTOR_FRONT_RIGHT_IDX: usize = 1;
+            const MOTOR_FRONT_RIGHT_IDX: usize = 2;
             const MOTOR_FRONT_RIGHT_REV: bool = false;
 
-            const MOTOR_BACK_RIGHT_IDX: usize = 2;
-            const MOTOR_BACK_RIGHT_REV: bool = false;
+            const MOTOR_BACK_RIGHT_IDX: usize = 3;
+            const MOTOR_BACK_RIGHT_REV: bool = true;
 
-            const MOTOR_BACK_LEFT_IDX: usize = 3;
-            const MOTOR_BACK_LEFT_REV: bool = true;
+            const MOTOR_BACK_LEFT_IDX: usize = 0;
+            const MOTOR_BACK_LEFT_REV: bool = false;
 
-            let thrust = 0.0;
+            let thrust = 50.0;
             let motor_throttles = [
-                thrust + roll + pitch - yaw,
-                thrust - roll + pitch + yaw,
-                thrust - roll - pitch - yaw,
-                thrust + roll - pitch + yaw,
+                thrust - roll - pitch + yaw,
+                thrust + roll - pitch - yaw,
+                thrust + roll + pitch + yaw,
+                thrust - roll + pitch - yaw,
             ]
             // .map(|f| f.clamp(-1000.0, 1000.0));
             .map(|f| f.clamp(0.0, 1000.0));
@@ -193,7 +193,7 @@ async fn main(spawner: Spawner) -> ! {
             }
         }
 
-        if let Some(remote_req) = remote_reqests.try_receive() {
+        if let Ok(remote_req) = remote_reqests.try_receive() {
             match remote_req {
                 RemoteRequest::Ping => {
                     drone_responses.send(DroneResponse::Pong).await;
