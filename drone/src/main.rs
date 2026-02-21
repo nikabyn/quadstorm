@@ -7,7 +7,6 @@
 )]
 
 extern crate alloc;
-use alloc::boxed::Box;
 use esp_backtrace as _;
 
 use alloc::format;
@@ -87,12 +86,10 @@ async fn main(spawner: Spawner) -> ! {
 
     loop {
         if let Ok(remote_req) = remote_reqests.try_receive() {
+            info!("Received {}", remote_req);
             match remote_req {
                 RemoteRequest::Ping => {
                     drone_responses.send(DroneResponse::Pong).await;
-                    drone_responses
-                        .send(DroneResponse::Log(Box::from([])))
-                        .await;
                 }
                 _ => todo!(),
             }

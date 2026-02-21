@@ -8,6 +8,7 @@ anyhow = "1.0.101"
 common-messages = { path = "../common-messages" }
 defmt-decoder = "1.1.0"
 defmt-parser = "1.0.0"
+logos = "0.16.1"
 object = { version = "0.38.1", default-features = false, features = [
   "elf",
   "read_core",
@@ -15,3 +16,4 @@ object = { version = "0.38.1", default-features = false, features = [
 ] }
 probe-rs = { git = "https://github.com/probe-rs/probe-rs", rev = "8abe521572dc2bfb0878de489547f0c3ed054c52" }
 ratatui = "0.30.0"
+tui-input = "0.15.0"
