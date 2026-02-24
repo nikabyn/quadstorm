@@ -130,26 +130,33 @@ async fn main(spawner: Spawner) -> ! {
         rx
     };
 
-    let motors_off_until = Instant::now().saturating_add(CONTROLLER_STABILIZE_TIME);
-
     let mut thrust = 0.0;
     let mut armed = false;
 
     loop {
         let now = Instant::now();
 
-        match inputs.try_receive() {
-            Some(Input::Armed(new_armed)) => armed = *new_armed,
-            Some(Input::Target(new_target)) => fusion.set_target(*new_target),
-            Some(Input::Thrust(new_thrust)) => thrust = *new_thrust,
-            Some(Input::Tune { kp, ki, kd }) => {
-                for i in 0..3 {
-                    fusion.pid[i].k_p = kp[i];
-                    fusion.pid[i].k_i = ki[i];
-                    fusion.pid[i].k_d = kd[i];
+        if let Some(input) = inputs.try_receive() {
+            match input {
+                Input::Armed(true) => {
+                    armed = true;
+                    info!("armed main");
+                }
+                Input::Armed(false) => {
+                    armed = false;
+                    info!("disarmed main");
+                }
+                Input::Target(new_target) => fusion.set_target(*new_target),
+                Input::Thrust(new_thrust) => thrust = *new_thrust,
+                Input::Tune { kp, ki, kd } => {
+                    for i in 0..3 {
+                        fusion.pid[i].k_p = kp[i];
+                        fusion.pid[i].k_i = ki[i];
+                        fusion.pid[i].k_d = kd[i];
+                    }
                 }
             }
-            _ => {}
+            inputs.receive_done();
         }
 
         let imu_sample = imu_data.receive().await;
@@ -176,11 +183,10 @@ async fn main(spawner: Spawner) -> ! {
         .map(|f| f.clamp(0.0, 1000.0));
 
         let mapped_motor_throttles = map_motor_throttles(motor_throttles);
-        if now < motors_off_until {
-            // some time to let the controller stabilize
-            motors.send_throttles([1000; 4]).await;
-        } else if armed {
+        if armed {
             motors.send_throttles(mapped_motor_throttles).await;
+        } else {
+            motors.send_throttles([1000; 4]).await;
         }
 
         if let Some(msg) = telemetry.try_send() {
@@ -242,14 +248,18 @@ async fn handle_remote_requests(
                     info!("armed");
                     armed = true;
                     arm_ticker.reset();
+                    *inputs.send().await = Input::Armed(true);
+                    inputs.send_done();
                 }
 
                 drone_responses.send(DroneResponse::ArmState(armed)).await;
             }
             RemoteRequest::SetArm(false) => {
+                info!("disarmed");
                 armed = false;
                 *inputs.send().await = Input::Armed(false);
                 inputs.send_done();
+
                 drone_responses.send(DroneResponse::ArmState(armed)).await;
             }
             RemoteRequest::ArmConfirm => {
