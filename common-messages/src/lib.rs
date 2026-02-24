@@ -26,8 +26,17 @@ pub enum RemoteRequest {
 pub enum DroneResponse {
     Pong,
     ArmState(bool),
-    MotorsState([f32; 4]),
+    Telemetry(Telemetry),
     Log(Box<[u8]>),
+}
+
+#[derive(Debug, Format, SchemaWrite, SchemaRead, PartialEq, Clone, Copy)]
+pub struct Telemetry {
+    pub input_orientation: [f32; 3],
+    pub input_thrust: f32,
+    pub input_armed: bool,
+    pub output_orientation: [f32; 3],
+    pub output_throttles: [u16; 4],
 }
 
 #[derive(Debug, Format, PartialEq, Eq)]

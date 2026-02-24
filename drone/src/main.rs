@@ -9,21 +9,23 @@
 extern crate alloc;
 use defmt_rtt as _;
 use drone::{motors, sensor_fusion};
-use embassy_time::Duration;
+use embassy_futures::select::{Either, select};
+use embassy_sync::{channel, zerocopy_channel};
+use embassy_time::{Duration, Instant, Ticker};
 use esp_backtrace as _;
 
 use alloc::format;
 use defmt::{error, info, warn};
 use drone::esp_ikarus::bmi323;
 use embassy_executor::Spawner;
-use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
 use embassy_sync::channel::{Receiver, Sender};
 use esp_hal::clock::CpuClock;
 use esp_hal::peripherals::{Peripherals, SW_INTERRUPT, TIMG0, WIFI};
 use esp_hal::timer::timg::TimerGroup;
 
 use common_esp::{mpmc_channel, spsc_channel};
-use common_messages::{DroneResponse, RemoteRequest};
+use common_messages::{DroneResponse, RemoteRequest, Telemetry};
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
@@ -116,147 +118,210 @@ async fn main(spawner: Spawner) -> ! {
         0.95, [0.0; 3], [0.0; 3], [25.0; 3], [0.0; 3], [10.0; 3],
     );
 
-    let motors_off_until = embassy_time::Instant::now().saturating_add(CONTROLLER_STABILIZE_TIME);
-    let mut next_report = embassy_time::Instant::now();
+    let mut telemetry = {
+        let (tx, rx) = spsc_channel!(Telemetry, 1).split();
+        spawner.must_spawn(log_send_telementry(rx, drone_responses));
+        tx
+    };
+
+    let mut inputs = {
+        let (tx, rx) = spsc_channel!(Input, 16).split();
+        spawner.must_spawn(handle_remote_requests(remote_reqests, drone_responses, tx));
+        rx
+    };
+
+    let motors_off_until = Instant::now().saturating_add(CONTROLLER_STABILIZE_TIME);
 
     let mut thrust = 0.0;
-    let mut armed_until = None;
-    // let mut thrust = 100.0;
-    // let mut armed_until =
-    //     Some(embassy_time::Instant::now().saturating_add(Duration::from_secs(1000)));
+    let mut armed = false;
 
     loop {
-        let imu_sample = imu_data.receive().await;
-        {
-            defmt::debug!(
-                "imu: roll={:02}, \tpitch={:02}, \tyaw={:02}, \t\tax={:02}, \tay={:02}, \taz={:02}, \ttime={}",
-                imu_sample.gyro[0],
-                imu_sample.gyro[1],
-                imu_sample.gyro[2],
-                imu_sample.accl[0],
-                imu_sample.accl[1],
-                imu_sample.accl[2],
-                imu_sample.time,
-            );
-            let [roll, pitch, yaw] = fusion.advance(*imu_sample);
-            imu_data.receive_done();
+        let now = Instant::now();
 
-            let motor_throttles = [
-                thrust - roll - pitch + yaw,
-                thrust + roll - pitch - yaw,
-                thrust + roll + pitch + yaw,
-                thrust - roll + pitch - yaw,
-            ]
-            // .map(|f| f.clamp(-1000.0, 1000.0));
-            .map(|f| f.clamp(0.0, 1000.0));
-
-            let mapped_motor_throttles = [
-                if MOTOR_FRONT_LEFT_REV {
-                    -motor_throttles[MOTOR_FRONT_LEFT_IDX]
-                } else {
-                    motor_throttles[MOTOR_FRONT_LEFT_IDX]
-                },
-                if MOTOR_FRONT_RIGHT_REV {
-                    -motor_throttles[MOTOR_FRONT_RIGHT_IDX]
-                } else {
-                    motor_throttles[MOTOR_FRONT_RIGHT_IDX]
-                },
-                if MOTOR_BACK_RIGHT_REV {
-                    -motor_throttles[MOTOR_BACK_RIGHT_IDX]
-                } else {
-                    motor_throttles[MOTOR_BACK_RIGHT_IDX]
-                },
-                if MOTOR_BACK_LEFT_REV {
-                    -motor_throttles[MOTOR_BACK_LEFT_IDX]
-                } else {
-                    motor_throttles[MOTOR_BACK_LEFT_IDX]
-                },
-            ]
-            .map(|t| t + 1000.0)
-            .map(|t| t as u16);
-
-            if embassy_time::Instant::now() < motors_off_until {
-                // some time to let the controller stabilize
-                motors.send_throttles([1000; 4]).await;
-            } else if let Some(au) = armed_until {
-                if au > embassy_time::Instant::now() {
-                    motors.send_throttles(mapped_motor_throttles).await;
-                } else {
-                    warn!("arm confirmation ceased");
-                    armed_until = None;
+        match inputs.try_receive() {
+            Some(Input::Armed(new_armed)) => armed = *new_armed,
+            Some(Input::Target(new_target)) => fusion.set_target(*new_target),
+            Some(Input::Thrust(new_thrust)) => thrust = *new_thrust,
+            Some(Input::Tune { kp, ki, kd }) => {
+                for i in 0..3 {
+                    fusion.pid[i].k_p = kp[i];
+                    fusion.pid[i].k_i = ki[i];
+                    fusion.pid[i].k_d = kd[i];
                 }
             }
-
-            if embassy_time::Instant::now() >= next_report {
-                // info!("dt: {:?}", dt);
-                info!(
-                    "ori: {:?}, thrust: {}, armed_until: {:?}",
-                    fusion.orientation(),
-                    thrust,
-                    armed_until,
-                );
-                info!("roll: {}, pitch: {}, yaw: {}", roll, pitch, yaw);
-                info!("throttles: {:?}\n", mapped_motor_throttles);
-                // let formatted = format!(
-                //     "ori: {:?}, dt: {}ms, loop_freq: {}Hz",
-                //     fusion.orientation(),
-                //     dt.as_micros() as f32 / 1_000.0,
-                //     1_000_000.0 / (embassy_time::Instant::now() - sample_time).as_micros() as f32
-                // );
-                // info!("{}", formatted);
-                // *drone_responses.send().await = DroneResponse::Log(formatted);
-                // drone_responses.send_done();
-                next_report = embassy_time::Instant::now().saturating_add(Duration::from_secs(1));
-            }
+            _ => {}
         }
 
-        if let Ok(remote_req) = remote_reqests.try_receive() {
-            match remote_req {
-                RemoteRequest::Ping => {
-                    drone_responses.send(DroneResponse::Pong).await;
-                }
-                RemoteRequest::SetArm(true) => {
-                    if thrust != 0.0 {
-                        warn!("drone may not arm when thrust not zero");
-                    } else {
-                        info!("armed");
-                        armed_until =
-                            Some(embassy_time::Instant::now().saturating_add(UNCONFIRMED_ARM_TIME))
-                    }
+        let imu_sample = imu_data.receive().await;
+        defmt::debug!(
+            "imu: roll={:02}, \tpitch={:02}, \tyaw={:02}, \t\tax={:02}, \tay={:02}, \taz={:02}, \ttime={}",
+            imu_sample.gyro[0],
+            imu_sample.gyro[1],
+            imu_sample.gyro[2],
+            imu_sample.accl[0],
+            imu_sample.accl[1],
+            imu_sample.accl[2],
+            imu_sample.time,
+        );
+        let [roll, pitch, yaw] = fusion.advance(*imu_sample);
+        imu_data.receive_done();
 
-                    let is_armed = armed_until
-                        .map(|armed_until| embassy_time::Instant::now() < armed_until)
-                        .unwrap_or(false);
-                    drone_responses
-                        .send(DroneResponse::ArmState(is_armed))
-                        .await;
-                }
-                RemoteRequest::SetArm(false) => armed_until = None,
-                RemoteRequest::ArmConfirm => {
-                    if let Some(armed_until) = &mut armed_until {
-                        *armed_until =
-                            embassy_time::Instant::now().saturating_add(UNCONFIRMED_ARM_TIME)
-                    } else {
-                        warn!("tried to arm confirm on unarmed drone");
-                    }
-                }
-                RemoteRequest::SetThrust(new_thrust) => thrust = new_thrust,
-                RemoteRequest::SetTarget(target) => fusion.set_target(target),
-                RemoteRequest::SetTune { kp, ki, kd } => {
-                    fusion.pid[0].k_p = kp[0];
-                    fusion.pid[0].k_i = ki[0];
-                    fusion.pid[0].k_d = kd[0];
-                    fusion.pid[1].k_p = kp[1];
-                    fusion.pid[1].k_i = ki[1];
-                    fusion.pid[1].k_d = kd[1];
-                    fusion.pid[2].k_p = kp[2];
-                    fusion.pid[2].k_i = ki[2];
-                    fusion.pid[2].k_d = kd[2];
-                }
-                _ => warn!("unknown remote request received"),
+        let motor_throttles = [
+            thrust - roll - pitch + yaw,
+            thrust + roll - pitch - yaw,
+            thrust + roll + pitch + yaw,
+            thrust - roll + pitch - yaw,
+        ]
+        // .map(|f| f.clamp(-1000.0, 1000.0));
+        .map(|f| f.clamp(0.0, 1000.0));
+
+        let mapped_motor_throttles = map_motor_throttles(motor_throttles);
+        if now < motors_off_until {
+            // some time to let the controller stabilize
+            motors.send_throttles([1000; 4]).await;
+        } else if armed {
+            motors.send_throttles(mapped_motor_throttles).await;
+        }
+
+        if let Some(msg) = telemetry.try_send() {
+            *msg = Telemetry {
+                input_orientation: fusion.orientation(),
+                input_thrust: thrust,
+                input_armed: armed,
+                output_orientation: [roll, pitch, yaw],
+                output_throttles: mapped_motor_throttles,
+            };
+            telemetry.send_done();
+        };
+    }
+}
+
+enum Input {
+    Thrust(f32),
+    Target([f32; 3]),
+    Tune {
+        kp: [f32; 3],
+        ki: [f32; 3],
+        kd: [f32; 3],
+    },
+    Armed(bool),
+}
+
+#[embassy_executor::task]
+async fn handle_remote_requests(
+    remote_requests: channel::Receiver<'static, CriticalSectionRawMutex, RemoteRequest, 64>,
+    drone_responses: channel::Sender<'static, CriticalSectionRawMutex, DroneResponse, 64>,
+    mut inputs: zerocopy_channel::Sender<'static, NoopRawMutex, Input>,
+) -> ! {
+    let mut armed = false;
+    let mut arm_ticker = Ticker::every(UNCONFIRMED_ARM_TIME);
+    let mut thrust = 0.0;
+
+    loop {
+        let Either::First(remote_req) = select(remote_requests.receive(), arm_ticker.next()).await
+        else {
+            if armed {
+                warn!("Arm not confirmed in time, disarming...");
+                armed = false;
+                *inputs.send().await = Input::Armed(false);
+                inputs.send_done();
             }
+
+            // Not armed, ignoring
+            continue;
+        };
+
+        match remote_req {
+            RemoteRequest::Ping => {
+                drone_responses.send(DroneResponse::Pong).await;
+            }
+            RemoteRequest::SetArm(true) => {
+                if thrust < 10.0 {
+                    warn!("drone may not arm when thrust not zero");
+                } else {
+                    info!("armed");
+                    armed = true;
+                    arm_ticker.reset();
+                }
+
+                drone_responses.send(DroneResponse::ArmState(armed)).await;
+            }
+            RemoteRequest::SetArm(false) => {
+                armed = false;
+                *inputs.send().await = Input::Armed(false);
+                inputs.send_done();
+            }
+            RemoteRequest::ArmConfirm => {
+                if armed {
+                    arm_ticker.reset();
+                } else {
+                    warn!("tried to arm confirm on unarmed drone");
+                }
+            }
+            RemoteRequest::SetThrust(new_thrust) => {
+                thrust = new_thrust;
+                *inputs.send().await = Input::Thrust(new_thrust);
+                inputs.send_done();
+                *inputs.send().await = Input::Thrust(new_thrust);
+                inputs.send_done();
+            }
+            RemoteRequest::SetTarget(target) => {
+                *inputs.send().await = Input::Target(target);
+                inputs.send_done();
+            }
+            RemoteRequest::SetTune { kp, ki, kd } => {
+                *inputs.send().await = Input::Tune { kp, ki, kd };
+                inputs.send_done();
+            }
+            _ => warn!("unknown remote request received"),
         }
     }
+}
+
+#[embassy_executor::task]
+async fn log_send_telementry(
+    mut telemetry: zerocopy_channel::Receiver<'static, NoopRawMutex, Telemetry>,
+    drone_responses: channel::Sender<'static, CriticalSectionRawMutex, DroneResponse, 64>,
+) -> ! {
+    let mut ticker = Ticker::every(Duration::from_millis(500));
+    loop {
+        ticker.next().await;
+
+        telemetry.clear();
+        let received = *telemetry.receive().await;
+        info!("{}", received);
+        drone_responses
+            .send(DroneResponse::Telemetry(received))
+            .await;
+        telemetry.receive_done();
+    }
+}
+
+fn map_motor_throttles(throttles: [f32; 4]) -> [u16; 4] {
+    [
+        if MOTOR_FRONT_LEFT_REV {
+            -throttles[MOTOR_FRONT_LEFT_IDX]
+        } else {
+            throttles[MOTOR_FRONT_LEFT_IDX]
+        },
+        if MOTOR_FRONT_RIGHT_REV {
+            -throttles[MOTOR_FRONT_RIGHT_IDX]
+        } else {
+            throttles[MOTOR_FRONT_RIGHT_IDX]
+        },
+        if MOTOR_BACK_RIGHT_REV {
+            -throttles[MOTOR_BACK_RIGHT_IDX]
+        } else {
+            throttles[MOTOR_BACK_RIGHT_IDX]
+        },
+        if MOTOR_BACK_LEFT_REV {
+            -throttles[MOTOR_BACK_LEFT_IDX]
+        } else {
+            throttles[MOTOR_BACK_LEFT_IDX]
+        },
+    ]
+    .map(|t| t + 1000.0)
+    .map(|t| t as u16)
 }
 
 #[embassy_executor::task]
