@@ -2,7 +2,7 @@ use std::fmt::Display;
 use std::sync::mpsc;
 use std::sync::mpsc::TryRecvError;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow};
 use common_messages::{DroneResponse, Frame, FrameStreamDecoder, RemoteRequest};
@@ -176,7 +176,9 @@ impl<'a> App<'a> {
         remote_req: mpsc::Sender<RemoteRequest>,
         logs: mpsc::Receiver<(LogsTab, Line<'a>)>,
     ) -> Result<()> {
+        let mut armed = false;
         let tick_rate = Duration::from_millis(5);
+        let mut last_arm_confirm = Instant::now();
 
         loop {
             match logs.try_recv() {
@@ -190,11 +192,21 @@ impl<'a> App<'a> {
                 Err(TryRecvError::Empty) => {}
             }
             match drone_res.try_recv() {
-                Ok(res) => self
-                    .log_lines_remote
-                    .push(Line::from(format!("Received: {res:?}"))),
+                Ok(res) => {
+                    self.log_lines_remote
+                        .push(Line::from(format!("Received: {res:?}")));
+                    match res {
+                        DroneResponse::ArmState(new_armed) => armed = new_armed,
+                        _ => {}
+                    }
+                }
                 Err(TryRecvError::Disconnected) => break,
                 Err(TryRecvError::Empty) => {}
+            }
+
+            if armed && last_arm_confirm.elapsed() >= Duration::from_millis(250) {
+                remote_req.send(RemoteRequest::ArmConfirm)?;
+                last_arm_confirm = Instant::now();
             }
 
             terminal.draw(|frame| self.draw(frame))?;
@@ -207,10 +219,14 @@ impl<'a> App<'a> {
                         KeyCode::Char('1') => self.active_logs_tab = LogsTab::Remote,
                         KeyCode::Char('2') => self.active_logs_tab = LogsTab::Relay,
                         KeyCode::Char('3') => self.active_logs_tab = LogsTab::Drone,
-                        KeyCode::Char('w') => {}
-                        KeyCode::Char('a') => {}
-                        KeyCode::Char('s') => {}
-                        KeyCode::Char('d') => {}
+                        KeyCode::Char('a') => {
+                            remote_req.send(RemoteRequest::SetArm(true))?;
+                            armed = true;
+                        }
+                        KeyCode::Char('d') => {
+                            remote_req.send(RemoteRequest::SetArm(false))?;
+                            armed = false;
+                        }
                         KeyCode::Char('p') => remote_req.send(RemoteRequest::Ping)?,
                         KeyCode::Up => {}
                         KeyCode::Down => {}

@@ -236,7 +236,7 @@ async fn handle_remote_requests(
                 drone_responses.send(DroneResponse::Pong).await;
             }
             RemoteRequest::SetArm(true) => {
-                if thrust < 10.0 {
+                if thrust > 10.0 {
                     warn!("drone may not arm when thrust not zero");
                 } else {
                     info!("armed");
@@ -250,6 +250,7 @@ async fn handle_remote_requests(
                 armed = false;
                 *inputs.send().await = Input::Armed(false);
                 inputs.send_done();
+                drone_responses.send(DroneResponse::ArmState(armed)).await;
             }
             RemoteRequest::ArmConfirm => {
                 if armed {
