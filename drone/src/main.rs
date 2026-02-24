@@ -11,7 +11,7 @@ use defmt_rtt as _;
 use drone::{motors, sensor_fusion};
 use embassy_futures::select::{Either, select};
 use embassy_sync::{channel, zerocopy_channel};
-use embassy_time::{Duration, Instant, Ticker};
+use embassy_time::{Duration, Ticker};
 use esp_backtrace as _;
 
 use alloc::format;
@@ -49,7 +49,6 @@ const MOTOR_BACK_RIGHT_REV: bool = true;
 const MOTOR_BACK_LEFT_IDX: usize = 0;
 const MOTOR_BACK_LEFT_REV: bool = false;
 
-const CONTROLLER_STABILIZE_TIME: Duration = Duration::from_secs(2);
 const UNCONFIRMED_ARM_TIME: Duration = Duration::from_millis(500);
 
 #[esp_rtos::main]
@@ -131,11 +130,9 @@ async fn main(spawner: Spawner) -> ! {
     };
 
     let mut thrust = 0.0;
-    let mut armed = true;
+    let mut armed = false;
 
     loop {
-        let now = Instant::now();
-
         if let Some(input) = inputs.try_receive() {
             match input {
                 Input::Armed(true) => {

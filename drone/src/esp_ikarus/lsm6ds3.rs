@@ -1,3 +1,5 @@
+#![allow(unused_variables)]
+#![allow(dead_code)]
 use defmt::{error, warn};
 use embassy_executor::SpawnToken;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
@@ -71,6 +73,7 @@ impl<'d> TxPin<'d> {
 }
 
 pub struct LSM6DS3 {
+    buf: &'static mut [u8],
     spi: SpiDmaBus<'static, Async>,
     cs: TxPin<'static>,
     int1: Input<'static>,
@@ -256,33 +259,37 @@ impl LSM6DS3 {
     }
 
     pub async fn fifo_status(&mut self) -> Result<FifoStatus, esp_hal::spi::Error> {
-        let _tx = self.cs.start_tx();
-        let mut buf = [0; 5];
-        self.spi
-            .transfer_async(&mut buf, &[READ | FIFO_STATUS1])
-            .await?;
-        drop(_tx);
+        todo!("use new dma buffer");
 
-        let buf = &buf[1..];
-        let status = FifoStatus {
-            unread_words: u16::from_le_bytes([buf[0], buf[1] & 0x0f]),
-            threshold: buf[1] & (1 << 7) > 0,
-            over_run: buf[1] & (1 << 6) > 0,
-            full: buf[1] & (1 << 5) > 0,
-            empty: buf[1] & (1 << 4) > 0,
-            pattern: u16::from_le_bytes([buf[2], buf[3] & 0b11]),
-        };
+        // let _tx = self.cs.start_tx();
+        // let mut buf = [0; 5];
+        // self.spi
+        //     .transfer_async(&mut buf, &[READ | FIFO_STATUS1])
+        //     .await?;
+        // drop(_tx);
 
-        Ok(status)
+        // let buf = &buf[1..];
+        // let status = FifoStatus {
+        //     unread_words: u16::from_le_bytes([buf[0], buf[1] & 0x0f]),
+        //     threshold: buf[1] & (1 << 7) > 0,
+        //     over_run: buf[1] & (1 << 6) > 0,
+        //     full: buf[1] & (1 << 5) > 0,
+        //     empty: buf[1] & (1 << 4) > 0,
+        //     pattern: u16::from_le_bytes([buf[2], buf[3] & 0b11]),
+        // };
+
+        // Ok(status)
     }
 
     pub async fn read_fifo(&mut self, buf: &mut [u8]) -> Result<(), esp_hal::spi::Error> {
-        let _tx = self.cs.start_tx();
+        todo!("use new dma buffer");
 
-        self.spi.write_async(&[READ | FIFO_DATA_OUT_L]).await?;
-        self.spi.read_async(buf).await?;
+        // let _tx = self.cs.start_tx();
 
-        Ok(())
+        // self.spi.write_async(&[READ | FIFO_DATA_OUT_L]).await?;
+        // self.spi.read_async(buf).await?;
+
+        // Ok(())
     }
 
     pub async fn wait_for_data(&mut self) {
@@ -298,6 +305,8 @@ impl LSM6DS3 {
         cs: impl OutputPin + 'static,
         int1: impl InputPin + 'static,
     ) -> Self {
+        let buf = super::SPI_BUF.take();
+
         let cs = TxPin(Output::new(
             cs,
             esp_hal::gpio::Level::High,
@@ -334,7 +343,7 @@ impl LSM6DS3 {
             .into_async()
         };
 
-        Self { spi, cs, int1 }
+        Self { buf, spi, cs, int1 }
     }
 
     pub async fn configure(&mut self) -> Result<(), ConfigurationError> {
@@ -472,21 +481,25 @@ impl LSM6DS3 {
     }
 
     async fn read_register(&mut self, reg: u8) -> Result<u8, esp_hal::spi::Error> {
-        let _tx = self.cs.start_tx();
+        todo!("use new dma buffer");
 
-        self.spi.write_async(&[READ | reg]).await?;
-        let mut buf = [0];
-        self.spi.read_async(&mut buf).await?;
+        // let _tx = self.cs.start_tx();
 
-        Ok(buf[0])
+        // self.spi.write_async(&[READ | reg]).await?;
+        // let mut buf = [0];
+        // self.spi.read_async(&mut buf).await?;
+
+        // Ok(buf[0])
     }
 
     async fn write_register(&mut self, reg: u8, val: u8) -> Result<(), esp_hal::spi::Error> {
-        let _tx = self.cs.start_tx();
+        todo!("use new dma buffer");
 
-        self.spi.write_async(&[WRITE & reg, val]).await?;
+        // let _tx = self.cs.start_tx();
 
-        Ok(())
+        // self.spi.write_async(&[WRITE & reg, val]).await?;
+
+        // Ok(())
     }
 
     async fn write_verify_register(&mut self, reg: u8, val: u8) -> Result<(), CheckedWriteError> {

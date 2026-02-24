@@ -1,8 +1,9 @@
-use defmt::{Format, debug, error, info, trace};
+use defmt::{Format, debug, error, info, trace, warn};
 use embassy_executor::SpawnToken;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use esp_hal::{
     Async,
+    delay::{self, Delay},
     dma::{DmaChannelFor, DmaRxBuf, DmaTxBuf},
     gpio::{
         Input, InputConfig, InputPin, Output, OutputConfig, OutputPin,
@@ -40,7 +41,7 @@ const INT_MAP2: u8 = 0x3B;
 const WORDS_PER_SAMPLE: usize = 3 + // Accel
     3 + // Gyro
     1; // Time
-const BYTES_PER_SAMPLE: usize = (WORDS_PER_SAMPLE * 2) as _;
+// const BYTES_PER_SAMPLE: usize = (WORDS_PER_SAMPLE * 2) as _;
 
 const FIFO_FILL_LEVEL: u8 = 0x15;
 const FIFO_DATA: u8 = 0x16;
@@ -71,11 +72,15 @@ impl<F: FnOnce()> Drop for Tx<F> {
 impl<'d> TxPin<'d> {
     fn start_tx(&mut self) -> Tx<impl FnOnce()> {
         self.0.set_low();
-        Tx(Some(|| self.0.set_high()))
+        Tx(Some(|| {
+            self.0.set_high();
+            Delay::new().delay_micros(2);
+        }))
     }
 }
 
 pub struct BMI323 {
+    buf: &'static mut [u8],
     spi: SpiDmaBus<'static, Async>,
     cs: TxPin<'static>,
     int1: Input<'static>,
@@ -118,11 +123,8 @@ pub async fn read_imu(
     mut tx: embassy_sync::zerocopy_channel::Sender<'static, NoopRawMutex, Sample>,
 ) {
     debug!("[BMI323] beginning to read imu");
-    _ = imu.write_register(FIFO_CTRL, FIFO_FLUSH).await;
 
-    let mut buf = [0u8; BYTES_PER_SAMPLE * 265 + 2];
-
-    embassy_time::Timer::after_millis(5).await;
+    _ = imu.flush_fifo().await;
 
     loop {
         imu.wait_for_data().await;
@@ -134,14 +136,14 @@ pub async fn read_imu(
             fifo_watermark: _,
         }) = imu.fifo_status().await
         {
-            let len = (unread_words as usize * 2).min(buf.len());
-            if let Err(e) = imu.read_fifo(&mut buf).await {
+            let len = (unread_words as usize * 2).min(imu.buf.len());
+            if let Err(e) = unsafe { imu.read_fifo(len) }.await {
                 error!("unable to read from imu: {:?}", e);
                 // TODO: do something about it
                 break;
             }
 
-            let (words, leftover) = buf[0..len].as_chunks::<2>();
+            let (words, leftover) = imu.buf[2..len + 2].as_chunks::<2>();
             assert!(
                 leftover.is_empty(),
                 "we only read in words, so buf should chunk nicely"
@@ -187,6 +189,8 @@ impl BMI323 {
         cs: impl OutputPin + 'static,
         int1: impl InputPin + 'static,
     ) -> Self {
+        let buf = super::SPI_BUF.take();
+
         let cs = TxPin(Output::new(
             cs,
             esp_hal::gpio::Level::High,
@@ -223,7 +227,7 @@ impl BMI323 {
             .into_async()
         };
 
-        Self { spi, cs, int1 }
+        Self { buf, spi, cs, int1 }
     }
 
     pub async fn configure(&mut self) -> Result<(), ConfigurationError> {
@@ -325,7 +329,6 @@ impl BMI323 {
             .await
             .map_err(ConfigurationError::Verification)?;
 
-        // TODO: turn ODR back up
         // acc config
         // const ACC_ODR: u16 = 0b1011; // 0.8kHz
         const ACC_ODR: u16 = 0b1100; // 1.6kHz
@@ -498,24 +501,33 @@ impl BMI323 {
     }
 
     async fn read_register(&mut self, reg: u8) -> Result<u16, esp_hal::spi::Error> {
-        let _tx = self.cs.start_tx();
+        let cmd = [READ | reg, 0, 0, 0];
+        self.buf[0..cmd.len()].copy_from_slice(&cmd);
 
-        let mut buf = [READ | reg, 0, 0, 0];
-        self.spi.transfer_in_place_async(&mut buf).await?;
-        let v = u16::from_le_bytes([buf[2], buf[3]]);
+        critical_section::with(|_cs| {
+            let _tx = self.cs.start_tx();
+            self.spi
+                // .transfer_in_place_async(&mut self.buf[0..cmd.len()])
+                // .await?;
+                .transfer_in_place(&mut self.buf[0..cmd.len()])
+        })?;
 
+        let v = u16::from_le_bytes([self.buf[2], self.buf[3]]);
         debug!("[SPI] read(0x{:02x}) => 0x{:04x}", reg, v);
         Ok(v)
     }
 
     async fn write_register(&mut self, reg: u8, val: u16) -> Result<(), esp_hal::spi::Error> {
-        let _tx = self.cs.start_tx();
-
         let [val0, val1] = val.to_le_bytes();
         debug!("[SPI] write(0x{:02x}) => 0x{:04x}", reg, val);
-        self.spi.write_async(&[WRITE & reg, val0, val1]).await?;
 
-        Ok(())
+        let cmd = [WRITE & reg, val0, val1];
+        self.buf[0..cmd.len()].copy_from_slice(&cmd);
+
+        let _tx = self.cs.start_tx();
+        // self.spi.write_async(&self.buf[0..cmd.len()]).await?;
+
+        critical_section::with(|_cs| self.spi.write(&self.buf[0..cmd.len()]))
     }
 
     async fn write_verify_register(&mut self, reg: u8, val: u16) -> Result<(), CheckedWriteError> {
@@ -548,19 +560,12 @@ impl BMI323 {
     }
 
     pub async fn fifo_status(&mut self) -> Result<FifoStatus, esp_hal::spi::Error> {
-        let _tx = self.cs.start_tx();
-        // Read INT_STATUS1 and INT_STATUS2
-        let mut buf = [READ | INT_STATUS1, 0, 0, 0, 0, 0];
-        self.spi.transfer_in_place_async(&mut buf).await?;
-        drop(_tx);
-        let fifo_watermark = buf[3] & 0x40 > 0;
-        let fifo_full = buf[5] & 0x80 > 0;
+        let int_status1 = self.read_register(INT_STATUS1).await?;
+        let int_status2 = self.read_register(INT_STATUS1).await?;
+        let unread_words = self.read_register(FIFO_FILL_LEVEL).await?;
 
-        let _tx = self.cs.start_tx();
-        let mut buf = [READ | FIFO_FILL_LEVEL, 0, 0, 0];
-        self.spi.transfer_in_place_async(&mut buf).await?;
-        drop(_tx);
-        let unread_words = u16::from_le_bytes([buf[2], buf[3]]);
+        let fifo_watermark = int_status1 & 1u16 << 14 > 0;
+        let fifo_full = int_status2 & 1u16 << 15 > 0;
 
         trace!(
             "[BMI323] fifo_status: full={}, unread_words={}, samples={}",
@@ -568,6 +573,19 @@ impl BMI323 {
             unread_words,
             unread_words / WORDS_PER_SAMPLE as u16
         );
+        if fifo_full {
+            warn!(
+                "[BMI323] FIFO FULL: flushing.., unread_words={}, samples={}",
+                unread_words,
+                unread_words / WORDS_PER_SAMPLE as u16
+            );
+            self.flush_fifo().await?;
+            return Ok(FifoStatus {
+                unread_words: 0,
+                fifo_full: false,
+                fifo_watermark: false,
+            });
+        }
 
         Ok(FifoStatus {
             unread_words,
@@ -576,14 +594,23 @@ impl BMI323 {
         })
     }
 
-    pub async fn read_fifo(&mut self, buf: &mut [u8]) -> Result<(), esp_hal::spi::Error> {
-        let _tx = self.cs.start_tx();
+    pub async fn flush_fifo(&mut self) -> Result<(), esp_hal::spi::Error> {
+        self.write_register(FIFO_CTRL, FIFO_FLUSH).await
+    }
 
-        buf[0] = READ | FIFO_DATA;
-        buf[1] = 0;
-        self.spi.transfer_in_place_async(buf).await?;
+    /// # Safety
+    /// make sure &mut buf pointer is stable
+    pub async unsafe fn read_fifo(&mut self, len: usize) -> Result<(), esp_hal::spi::Error> {
+        self.buf[0] = READ | FIFO_DATA;
+        self.buf[1] = 0;
 
-        Ok(())
+        critical_section::with(|_cs| {
+            let _tx = self.cs.start_tx();
+            self.spi
+                // .transfer_in_place_async(&mut self.buf[0..len + 2])
+                // .await?;
+                .transfer_in_place(&mut self.buf[0..len + 2])
+        })
     }
 
     pub async fn wait_for_data(&mut self) {
