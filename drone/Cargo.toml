@@ -18,21 +18,63 @@ test = false
 
 [dependencies]
 base64 = { version = "0.22.1", default-features = false }
-common-esp = { workspace = true }
-common-messages = { workspace = true }
-defmt = { workspace = true }
-defmt-rtt = { workspace = true }
-embassy-executor = { workspace = true }
-embassy-futures = { workspace = true }
-embassy-sync = { workspace = true }
-embassy-time = { workspace = true }
-esp-alloc = { workspace = true }
-esp-backtrace = { workspace = true }
-esp-bootloader-esp-idf = { workspace = true }
-esp-hal = { workspace = true, features = ["unstable"] }
-esp-println = { workspace = true }
-esp-radio = { workspace = true }
-esp-rtos = { workspace = true }
+common-esp = { path = "../common-esp" }
+common-messages = { path = "../common-messages" }
+critical-section = "1.2.0"
+defmt = { version = "1.0.1", features = ["alloc"] }
+defmt-rtt = "1.1.0"
+embassy-executor = { version = "0.9.1", features = ["defmt"] }
+embassy-futures = "0.1.2"
+embassy-sync = "0.7.2"
+embassy-time = { version = "0.5.0", features = ["defmt"] }
+esp-alloc = "0.9.0"
+esp-backtrace = { version = "0.18.1", features = [
+  "custom-halt",
+  "defmt",
+  "esp32c6",
+  "panic-handler"
+] }
+esp-bootloader-esp-idf = { version = "0.4.0", default-features = false, features = [
+  "defmt",
+  "esp32c6"
+] }
+esp-hal = { version = "1.0.0", features = ["defmt", "esp32c6", "unstable"] }
+esp-println = { version = "0.16.1", default-features = false, features = [
+  "critical-section",
+  "esp32c6",
+  "jtag-serial",
+] }
+esp-radio = { version = "0.17.0", features = [
+  "defmt",
+  "esp-alloc",
+  "esp-now",
+  "esp32c6",
+  "unstable",
+  "wifi",
+] }
+esp-rtos = { version = "0.2.0", features = [
+  "defmt",
+  "embassy",
+  "esp-alloc",
+  "esp-radio",
+  "esp32c6",
+] }
 m = "0.1.1"
-static_cell = { workspace = true }
-thiserror = { workspace = true }
+rtt-target = { version = "0.6.2" }
+static_cell = { version = "2.1.1" }
+thiserror = { version = "2.0.17", default-features = false }
+
+[profile.dev]
+# Rust debug is too slow.
+# For debug builds always builds with some optimization
+opt-level = "s"
+
+[profile.release]
+opt-level = "s"
+debug = 2
+debug-assertions = false
+overflow-checks = false
+lto = "fat"
+incremental = false
+# LLVM can perform better optimizations using a single thread
+codegen-units = 1

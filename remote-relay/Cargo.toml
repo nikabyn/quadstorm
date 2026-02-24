@@ -58,3 +58,18 @@ wincode = { version = "0.2.5", default-features = false, features = [
   "alloc",
   "derive"
 ] }
+
+[profile.dev]
+# Rust debug is too slow.
+# For debug builds always builds with some optimization
+opt-level = "s"
+
+[profile.release]
+opt-level = "s"
+debug = 2
+debug-assertions = false
+overflow-checks = false
+lto = "fat"
+incremental = false
+# LLVM can perform better optimizations using a single thread
+codegen-units = 1

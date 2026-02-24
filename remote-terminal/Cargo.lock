@@ -309,7 +309,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "common"
+name = "common-messages"
 version = "0.1.0"
 dependencies = [
  "defmt",
@@ -1974,7 +1974,7 @@ name = "remote-terminal"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "common",
+ "common-messages",
  "defmt-decoder",
  "defmt-parser",
  "object 0.38.1",

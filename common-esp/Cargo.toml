@@ -9,11 +9,26 @@ bench = false
 test = false
 
 [dependencies]
-defmt = { workspace = true }
-embassy-futures = { workspace = true }
-embassy-sync = { workspace = true }
-embassy-time = { workspace = true }
-esp-hal = { workspace = true }
-esp-radio = { workspace = true }
-static_cell = { workspace = true }
-wincode = { workspace = true }
+defmt = { version = "1.0.1", features = ["alloc"] }
+embassy-futures = "0.1.2"
+embassy-sync = "0.7.2"
+embassy-time = { version = "0.5.0", features = ["defmt"] }
+esp-hal = { version = "1.0.0", features = ["defmt", "esp32c6", "unstable"] }
+esp-println = { version = "0.16.1", default-features = false, features = [
+  "critical-section",
+  "esp32c6",
+  "jtag-serial",
+] }
+esp-radio = { version = "0.17.0", features = [
+  "defmt",
+  "esp-alloc",
+  "esp-now",
+  "esp32c6",
+  "unstable",
+  "wifi",
+] }
+static_cell = { version = "2.1.1" }
+wincode = { version = "0.2.5", default-features = false, features = [
+  "alloc",
+  "derive"
+] }

@@ -131,7 +131,7 @@ async fn main(spawner: Spawner) -> ! {
     };
 
     let mut thrust = 0.0;
-    let mut armed = false;
+    let mut armed = true;
 
     loop {
         let now = Instant::now();
