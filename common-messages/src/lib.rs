@@ -124,15 +124,17 @@ pub struct FrameStreamDecoder<Msg> {
     _msg: core::marker::PhantomData<Msg>,
 }
 
-impl<Msg> FrameStreamDecoder<Msg> {
-    pub fn new() -> Self {
+impl<Msg> Default for FrameStreamDecoder<Msg> {
+    fn default() -> Self {
         Self {
             buffer: [0; 1024],
             len: 0,
             _msg: core::marker::PhantomData,
         }
     }
+}
 
+impl<Msg> FrameStreamDecoder<Msg> {
     /// Read data into internal buffer
     pub fn receive(&mut self, mut f: impl FnMut(&mut [u8]) -> usize) {
         // Read into remaining buffer space

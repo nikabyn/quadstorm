@@ -126,7 +126,7 @@ async fn rtt_communicate(
     outgoing: Sender<'static, CriticalSectionRawMutex, RemoteRequest, 64>,
     incoming: Receiver<'static, CriticalSectionRawMutex, DroneResponse, 64>,
 ) {
-    let mut req_decoder = FrameStreamDecoder::<RemoteRequest>::new();
+    let mut req_decoder = FrameStreamDecoder::<RemoteRequest>::default();
 
     loop {
         // Relay outgoing requests to drone
