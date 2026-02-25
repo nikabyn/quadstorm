@@ -2,19 +2,22 @@ use std::time::Duration;
 
 use anyhow::{Result as AnyResult, anyhow};
 use bevy::DefaultPlugins;
-use bevy::app::{App, AppExit, FixedPostUpdate, FixedUpdate, Update};
+use bevy::app::{App, AppExit, FixedPostUpdate, FixedUpdate, Startup, Update};
+use bevy::camera::Camera2d;
 use bevy::ecs::message::{MessageReader, MessageWriter};
 use bevy::ecs::name::Name;
-use bevy::ecs::query::Changed;
+use bevy::ecs::query::{Changed, QuerySingleError};
 use bevy::ecs::resource::Resource;
-use bevy::ecs::system::{IntoSystem, Local, Query, Res, ResMut};
+use bevy::ecs::system::{Commands, IntoSystem, Local, Query, Res, ResMut};
 use bevy::input::ButtonState;
 use bevy::input::gamepad::{Gamepad, GamepadAxis, GamepadButton};
 use bevy::input::keyboard::{KeyCode, KeyboardInput};
 use bevy::input_focus::InputDispatchPlugin;
 use bevy::input_focus::tab_navigation::TabNavigationPlugin;
 use bevy::log::{Level, debug, error, error_once, info, trace, warn};
+use bevy::prelude::*;
 use bevy::time::Time;
+use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 use common_messages::RemoteRequest;
 
 mod rtt;
@@ -24,6 +27,8 @@ use rtt::{
 };
 
 use crate::rtt::{LogSource, log_error_system};
+
+mod plots;
 
 fn main() -> AnyResult<()> {
     let mut args = std::env::args().skip(1);
@@ -35,19 +40,36 @@ fn main() -> AnyResult<()> {
     };
 
     App::new()
-        .add_plugins((DefaultPlugins, InputDispatchPlugin, TabNavigationPlugin))
+        .add_plugins((
+            DefaultPlugins,
+            InputDispatchPlugin,
+            TabNavigationPlugin,
+            bevy_egui::EguiPlugin::default(),
+        ))
+        .insert_resource(plots::PlotData::default())
         .insert_resource(KeepArmed(false))
         .insert_resource(ElfResource::<RelayTag>::new(relay_elf_path)?)
         .insert_resource(ElfResource::<DroneTag>::new(drone_elf_path)?)
         .add_message::<RemoteMessage>()
         .add_message::<DroneMessage>()
         .add_message::<LogMessage>()
+        .add_systems(Startup, setup_camera_system)
+        .add_systems(EguiPrimaryContextPass, ui_system)
         .add_systems(Update, (keyboard_input_system, gamepad_input_system))
-        .add_systems(FixedUpdate, rtt_communication_system.pipe(log_error_system))
+        // .add_systems(FixedUpdate, rtt_communication_system.pipe(log_error_system))
         .add_systems(FixedUpdate, keep_armed_system)
         .add_systems(FixedPostUpdate, log_logs)
         .run();
 
+    Ok(())
+}
+
+fn setup_camera_system(mut commands: Commands) {
+    commands.spawn(Camera2d);
+}
+
+fn ui_system(mut contexts: EguiContexts) -> Result {
+    plots::draw_telemtry(&mut contexts)?;
     Ok(())
 }
 
