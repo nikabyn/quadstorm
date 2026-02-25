@@ -93,13 +93,13 @@ impl ComplementaryFilterFusion {
     }
 
     pub fn advance(&mut self, sample: impl ImuSample) -> [F; 3] {
+        let yaw_rotation = IMU_AXIS_SCALE[2] * sample.gyro()[IMU_AXIS_MAP[2]];
         let gyro_orientation = [
             self.orientation[0]
                 + (IMU_AXIS_SCALE[0] * sample.gyro()[IMU_AXIS_MAP[0]] * sample.dt()),
             self.orientation[1]
                 + (IMU_AXIS_SCALE[1] * sample.gyro()[IMU_AXIS_MAP[1]] * sample.dt()),
-            self.orientation[2]
-                + (IMU_AXIS_SCALE[2] * sample.gyro()[IMU_AXIS_MAP[2]] * sample.dt()),
+            self.orientation[2] + yaw_rotation * sample.dt(),
         ];
 
         let gravity = [
@@ -140,7 +140,10 @@ impl ComplementaryFilterFusion {
         [
             self.pid[0].advance(self.target[0] - self.orientation[0]),
             self.pid[1].advance(self.target[1] - self.orientation[1]),
-            self.pid[2].advance(self.target[2] - self.orientation[2]),
+            // // Yaw to fixed setpoint
+            // self.pid[2].advance(self.target[2] - self.orientation[2]),
+            // Yaw to target rotation speed
+            self.pid[2].advance(self.target[2] - yaw_rotation),
         ]
     }
 }
