@@ -3,7 +3,7 @@ use embassy_executor::SpawnToken;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use esp_hal::{
     Async,
-    delay::{self, Delay},
+    delay::Delay,
     dma::{DmaChannelFor, DmaRxBuf, DmaTxBuf},
     gpio::{
         Input, InputConfig, InputPin, Output, OutputConfig, OutputPin,

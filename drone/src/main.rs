@@ -11,7 +11,7 @@ use defmt_rtt as _;
 use drone::{motors, sensor_fusion};
 use embassy_futures::select::{Either, select};
 use embassy_sync::{channel, zerocopy_channel};
-use embassy_time::{Duration, Ticker};
+use embassy_time::{Duration, Instant, Ticker};
 use esp_backtrace as _;
 
 use alloc::format;
@@ -38,16 +38,16 @@ pub fn custom_halt() -> ! {
 }
 
 const MOTOR_FRONT_LEFT_IDX: usize = 1;
-const MOTOR_FRONT_LEFT_REV: bool = true;
+const MOTOR_FRONT_LEFT_REV: bool = false;
 
 const MOTOR_FRONT_RIGHT_IDX: usize = 2;
-const MOTOR_FRONT_RIGHT_REV: bool = false;
+const MOTOR_FRONT_RIGHT_REV: bool = true;
 
 const MOTOR_BACK_RIGHT_IDX: usize = 3;
-const MOTOR_BACK_RIGHT_REV: bool = true;
+const MOTOR_BACK_RIGHT_REV: bool = false;
 
 const MOTOR_BACK_LEFT_IDX: usize = 0;
-const MOTOR_BACK_LEFT_REV: bool = false;
+const MOTOR_BACK_LEFT_REV: bool = true;
 
 const UNCONFIRMED_ARM_TIME: Duration = Duration::from_millis(500);
 
@@ -86,6 +86,7 @@ async fn main(spawner: Spawner) -> ! {
         // let pico = peripherals.GPIO2;
         // let sck = peripherals.GPIO3;
         // let imu_int1 = peripherals.GPIO14;
+
         let imu_spi = peripherals.SPI2;
         let imu_dma = peripherals.DMA_CH0;
 
@@ -188,11 +189,12 @@ async fn main(spawner: Spawner) -> ! {
 
         if let Some(msg) = telemetry.try_send() {
             *msg = Telemetry {
-                input_orientation: fusion.orientation(),
-                input_thrust: thrust,
-                input_armed: armed,
-                output_orientation: [roll, pitch, yaw],
-                output_throttles: mapped_motor_throttles,
+                timestamp: Instant::now().as_millis(),
+                orientation: fusion.orientation(),
+                thrust: thrust,
+                armed: armed,
+                output: [roll, pitch, yaw],
+                throttles: mapped_motor_throttles,
             };
             telemetry.send_done();
         };
@@ -291,13 +293,12 @@ async fn log_send_telementry(
     mut telemetry: zerocopy_channel::Receiver<'static, NoopRawMutex, Telemetry>,
     drone_responses: channel::Sender<'static, CriticalSectionRawMutex, DroneResponse, 64>,
 ) -> ! {
-    let mut ticker = Ticker::every(Duration::from_millis(500));
+    let mut ticker = Ticker::every(Duration::from_millis(250));
     loop {
         ticker.next().await;
 
         telemetry.clear();
         let received = *telemetry.receive().await;
-        info!("{}", received);
         drone_responses
             .send(DroneResponse::Telemetry(received))
             .await;

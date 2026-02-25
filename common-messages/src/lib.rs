@@ -1,6 +1,8 @@
 #![no_std]
 
 extern crate alloc;
+use core::fmt::Display;
+
 use alloc::{boxed::Box, vec::Vec};
 
 use defmt::Format;
@@ -32,11 +34,29 @@ pub enum DroneResponse {
 
 #[derive(Debug, Format, SchemaWrite, SchemaRead, PartialEq, Clone, Copy)]
 pub struct Telemetry {
-    pub input_orientation: [f32; 3],
-    pub input_thrust: f32,
-    pub input_armed: bool,
-    pub output_orientation: [f32; 3],
-    pub output_throttles: [u16; 4],
+    pub timestamp: u64,
+    pub orientation: [f32; 3],
+    pub thrust: f32,
+    pub armed: bool,
+    pub output: [f32; 3],
+    pub throttles: [u16; 4],
+}
+
+impl Display for Telemetry {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        writeln!(
+            f,
+            "{{time: {}, ori: [x={:.3},y={:.3},z={:.3}], thrust: {}, armed: {}, out: {:?}, throttles: {:?}}}",
+            self.timestamp,
+            self.orientation[0],
+            self.orientation[1],
+            self.orientation[2],
+            self.thrust,
+            self.armed,
+            self.output,
+            self.throttles
+        )
+    }
 }
 
 #[derive(Debug, Format, PartialEq, Eq)]
