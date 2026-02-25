@@ -9,7 +9,7 @@ use bevy::ecs::query::Changed;
 use bevy::ecs::resource::Resource;
 use bevy::ecs::system::{IntoSystem, Local, Query, Res, ResMut};
 use bevy::input::ButtonState;
-use bevy::input::gamepad::{Gamepad, GamepadAxis};
+use bevy::input::gamepad::{Gamepad, GamepadAxis, GamepadButton};
 use bevy::input::keyboard::{KeyCode, KeyboardInput};
 use bevy::input_focus::InputDispatchPlugin;
 use bevy::input_focus::tab_navigation::TabNavigationPlugin;
@@ -53,6 +53,9 @@ fn main() -> AnyResult<()> {
 
 fn log_logs(mut logs: MessageReader<LogMessage>) {
     for LogMessage(source, level, message) in logs.read() {
+        if *source == LogSource::Relay {
+            continue;
+        }
         match (*level, *source) {
             (Level::ERROR, LogSource::Drone) => error!(target: "drone", "{message}"),
             (Level::WARN, LogSource::Drone) => warn!(target: "drone", "{message}"),
@@ -78,7 +81,7 @@ fn keep_armed_system(
     mut remote_msgs: MessageWriter<RemoteMessage>,
 ) {
     let current = time.elapsed();
-    let time_has_elapsed = (current - *time_last_sent) >= Duration::from_millis(250);
+    let time_has_elapsed = (current - *time_last_sent) >= Duration::from_millis(100);
     if keep_armed.0 && time_has_elapsed {
         *time_last_sent = current;
         remote_msgs.write(RemoteMessage(RemoteRequest::ArmConfirm));
@@ -115,13 +118,12 @@ fn keyboard_input_system(
 fn gamepad_input_system(
     gamepads: Query<(&Name, &Gamepad), Changed<Gamepad>>,
     mut remote_msgs: MessageWriter<RemoteMessage>,
+    mut keep_armed: ResMut<KeepArmed>,
 ) {
     let Some((_, gamepad)) = gamepads.iter().next() else {
         error_once!("No gamepad connected.");
         return;
     };
-
-    // TODO Arming button
 
     let pitch = gamepad.get(GamepadAxis::LeftStickY).unwrap();
     let roll = gamepad.get(GamepadAxis::LeftStickX).unwrap();
@@ -131,7 +133,7 @@ fn gamepad_input_system(
     let pitch = pitch * 30.0;
     let roll = roll * 30.0;
     let yaw = yaw * 30.0;
-    let thrust = (thrust + 1.0) * 1000.0;
+    let thrust = ((thrust / 2.0) + 0.5) * 1000.0;
 
     debug!(
         "pitch={}, roll={}, yaw={}, thrust={}",
@@ -141,4 +143,19 @@ fn gamepad_input_system(
         RemoteMessage(RemoteRequest::SetTarget([roll, pitch, yaw])),
         RemoteMessage(RemoteRequest::SetThrust(thrust)),
     ]);
+
+    let armed_left = gamepad
+        .get(GamepadButton::North)
+        .map(|v| v == 1.0)
+        .unwrap_or(false);
+    let armed_right = gamepad
+        .get(GamepadButton::East)
+        .map(|v| v == 1.0)
+        .unwrap_or(false);
+    let armed = armed_left && armed_right;
+    if keep_armed.0 != armed {
+        info!("armed: {armed}");
+        remote_msgs.write(RemoteMessage(RemoteRequest::SetArm(armed)));
+        keep_armed.0 = armed;
+    }
 }
