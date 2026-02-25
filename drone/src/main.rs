@@ -177,7 +177,7 @@ async fn main(spawner: Spawner) -> ! {
             thrust - roll + pitch - yaw,
         ]
         // .map(|f| f.clamp(-1000.0, 1000.0));
-        .map(|f| f.clamp(0.0, 1000.0));
+        .map(|f| f.clamp(100.0, 1000.0));
 
         let mapped_motor_throttles = map_motor_throttles(motor_throttles);
         if armed {
