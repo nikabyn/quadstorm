@@ -1,34 +1,12 @@
-use bevy::ecs::{
-    component::Component,
-    message::{MessageReader, MessageWriter},
-    prelude::Result as BevyResult,
-    system::{Commands, Local, Query},
-};
+use bevy::ecs::message::{MessageReader, MessageWriter};
+use bevy::ecs::{prelude::Result as BevyResult, system::Local};
 use bevy::log::info;
-use bevy_egui::{
-    EguiContexts,
-    egui::{self, Color32, Ui, Vec2b, vec2},
-};
-use common_messages::{DroneResponse, RemoteRequest, Telemetry};
+use bevy_egui::EguiContexts;
+use bevy_egui::egui::{self, Button, Color32, Ui};
+use common_messages::{DroneResponse, RemoteRequest};
 use egui_plot::PlotPoint;
 
 use crate::rtt::{DroneMessage, RemoteMessage};
-
-#[derive(Default)]
-pub struct CollectedTelemetry {
-    orientation: [Vec<PlotPoint>; 3],
-    thrust: Vec<PlotPoint>,
-    armed: Vec<PlotPoint>,
-    output: [Vec<PlotPoint>; 3],
-    throttles: [Vec<PlotPoint>; 4],
-}
-
-#[derive(Default)]
-pub struct Settings {
-    kp: [f32; 3],
-    ki: [f32; 3],
-    kd: [f32; 3],
-}
 
 pub fn ui_system(
     mut contexts: EguiContexts,
@@ -36,7 +14,7 @@ pub fn ui_system(
     mut settings: Local<Settings>,
     mut telemetry: Local<CollectedTelemetry>,
     mut drone_msgs: MessageReader<DroneMessage>,
-    mut remote_msgs: MessageWriter<RemoteMessage>,
+    remote_msgs: MessageWriter<RemoteMessage>,
 ) -> BevyResult {
     for DroneMessage(drone_res) in drone_msgs.read() {
         if let &DroneResponse::Telemetry(sample) = drone_res {
@@ -64,20 +42,31 @@ pub fn ui_system(
 
     let ctx = contexts.ctx_mut()?;
 
-    egui::CentralPanel::default().show(ctx, |ui| {
-        draw_ui(ui, active_tab, settings, telemetry, drone_msgs);
-    });
+    egui::TopBottomPanel::new(egui::panel::TopBottomSide::Bottom, "panel_bottom")
+        .show_separator_line(true)
+        .show(ctx, |ui| draw_statusbar(ui));
+
+    egui::SidePanel::new(egui::panel::Side::Right, "panel_right")
+        .resizable(true)
+        .default_width(300.)
+        .min_width(300.)
+        .max_width(500.)
+        .show(ctx, |ui| {
+            ui.take_available_width();
+            draw_settings(ui, &mut settings, remote_msgs);
+        });
+
+    egui::TopBottomPanel::new(egui::panel::TopBottomSide::Top, "panel_top")
+        .show_separator_line(false)
+        .show(ctx, |ui| draw_navbar(ui, &mut active_tab));
+
+    egui::CentralPanel::default().show(ctx, |ui| draw_main(ui, active_tab, telemetry));
 
     Ok(())
 }
 
-pub fn draw_ui(
-    ui: &mut Ui,
-    mut active_tab: Local<usize>,
-    mut settings: Local<Settings>,
-    mut telemetry: Local<CollectedTelemetry>,
-    mut drone_msgs: MessageReader<DroneMessage>,
-) {
+pub fn draw_navbar(ui: &mut Ui, active_tab: &mut usize) {
+    ui.add_space(8.);
     ui.horizontal(|ui| {
         let clicked = ["Telemetry", "Preview", "Relay Logs", "Drone Logs"]
             .iter()
@@ -99,43 +88,29 @@ pub fn draw_ui(
             *active_tab = tab_index;
         }
     });
+}
 
-    ui.add_space(10.);
+pub fn draw_statusbar(ui: &mut Ui) {
+    ui.horizontal(|ui| {
+        ui.label("Drone: ");
+        ui.label("Relay: ");
+        ui.label("Controller: ");
+    });
+}
 
+pub fn draw_main(ui: &mut Ui, active_tab: Local<usize>, telemetry: Local<CollectedTelemetry>) {
     if *active_tab == 0 {
         draw_telemetry(ui, &telemetry);
     }
+}
 
-    // TODO draw settings
-
-    // ui.label("Tune");
-
-    // // ui.label("ki");
-    // ui.horizontal(|ui| {
-    //     for i in 0..3 {
-    //         ui.add(egui::DragValue::new(&mut settings.kp[i]).max_decimals(4));
-    //     }
-    // });
-    // // ui.label("ki");
-    // // ui.horizontal(|ui| {
-    // //     for i in 0..3 {
-    // //         ui.add(egui::DragValue::new(&mut ui_state.ki[i]));
-    // //     }
-    // // });
-    // // ui.label("kd");
-    // // ui.horizontal(|ui| {
-    // //     for i in 0..3 {
-    // //         ui.add(egui::DragValue::new(&mut ui_state.kd[i]));
-    // //     }
-    // // });
-
-    // if ui.button("Send tune").clicked() {
-    //     remote_msgs.write(RemoteMessage(RemoteRequest::SetTune {
-    //         kp: settings.kp,
-    //         ki: settings.kp,
-    //         kd: settings.kp,
-    //     }));
-    // }
+#[derive(Default)]
+pub struct CollectedTelemetry {
+    orientation: [Vec<PlotPoint>; 3],
+    thrust: Vec<PlotPoint>,
+    armed: Vec<PlotPoint>,
+    output: [Vec<PlotPoint>; 3],
+    throttles: [Vec<PlotPoint>; 4],
 }
 
 pub fn draw_telemetry(ui: &mut Ui, telemetry: &CollectedTelemetry) {
@@ -182,4 +157,42 @@ pub fn draw_telemetry(ui: &mut Ui, telemetry: &CollectedTelemetry) {
                 }
             });
     });
+}
+
+#[derive(Default)]
+pub struct Settings {
+    tune: [f32; 3],
+}
+
+pub fn draw_settings(
+    ui: &mut Ui,
+    settings: &mut Settings,
+    mut remote_msgs: MessageWriter<RemoteMessage>,
+) {
+    ui.add_space(8.);
+    ui.label("Settings");
+    ui.add_space(16.);
+
+    ui.label("Tune");
+    ui.columns(3, |cols| {
+        for (i, col) in cols.iter_mut().enumerate() {
+            col.add(egui::DragValue::new(&mut settings.tune[i]).max_decimals(4));
+        }
+    });
+    let update_button = ui.add_sized([ui.available_width(), 0.0], Button::new("Send"));
+    if update_button.clicked() {
+        remote_msgs.write(RemoteMessage(RemoteRequest::SetTune {
+            kp: settings.tune,
+            ki: settings.tune,
+            kd: settings.tune,
+        }));
+    }
+
+    ui.add_space(16.);
+
+    ui.label("Reset");
+    let reset_button = ui.add_sized([ui.available_width(), 0.0], Button::new("Send"));
+    if reset_button.clicked() {
+        // remote_msgs.write(RemoteMessage(RemoteRequest::Reset));
+    }
 }
