@@ -1,5 +1,5 @@
 [package]
-name = "remote"
+name = "relay"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
@@ -7,7 +7,7 @@ rust-version = "1.88"
 [[bin]]
 bench = false
 doctest = false
-name = "remote"
+name = "relay"
 path = "src/main.rs"
 test = false
 

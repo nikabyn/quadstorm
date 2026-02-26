@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use anyhow::{Result as AnyResult, anyhow};
 use bevy::DefaultPlugins;
-use bevy::app::{App, AppExit, FixedPostUpdate, FixedUpdate, Startup, Update};
+use bevy::app::{App, AppExit, FixedUpdate, Startup, Update};
 use bevy::camera::Camera2d;
 use bevy::ecs::message::{MessageReader, MessageWriter};
 use bevy::ecs::name::Name;
