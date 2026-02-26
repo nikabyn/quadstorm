@@ -40,16 +40,16 @@ pub fn custom_halt() -> ! {
 }
 
 const MOTOR_FRONT_LEFT_IDX: usize = 1;
-const MOTOR_FRONT_LEFT_REV: bool = true;
+const MOTOR_FRONT_LEFT_REV: bool = false;
 
 const MOTOR_FRONT_RIGHT_IDX: usize = 2;
-const MOTOR_FRONT_RIGHT_REV: bool = false;
+const MOTOR_FRONT_RIGHT_REV: bool = true;
 
 const MOTOR_BACK_RIGHT_IDX: usize = 3;
-const MOTOR_BACK_RIGHT_REV: bool = true;
+const MOTOR_BACK_RIGHT_REV: bool = false;
 
 const MOTOR_BACK_LEFT_IDX: usize = 0;
-const MOTOR_BACK_LEFT_REV: bool = false;
+const MOTOR_BACK_LEFT_REV: bool = true;
 
 const UNCONFIRMED_ARM_TIME: Duration = Duration::from_millis(500);
 const IDLE_THRUST: f32 = 70.0;
@@ -190,7 +190,7 @@ async fn main(spawner: Spawner) -> ! {
             .map(|f| f.clamp(IDLE_THRUST, 1000.0));
 
         motors_saturated =
-            zip(motor_throttles, clamped_throttles).any(|(raw, clamped)| raw >= clamped);
+            zip(motor_throttles, clamped_throttles).any(|(raw, clamped)| raw > clamped);
 
         let mapped_motor_throttles = map_motor_throttles(clamped_throttles);
         if armed {

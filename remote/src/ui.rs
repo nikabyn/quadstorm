@@ -4,7 +4,7 @@ use bevy::ecs::{prelude::Result as BevyResult, system::Local};
 use bevy::log::Level;
 use bevy::time::Time;
 use bevy_egui::EguiContexts;
-use bevy_egui::egui::{self, Button, Color32, RichText, ScrollArea, Ui};
+use bevy_egui::egui::{self, Button, Color32, Label, RichText, ScrollArea, Ui};
 use common_messages::{DroneResponse, RemoteRequest};
 use egui_plot::PlotPoint;
 
@@ -233,7 +233,9 @@ fn draw_logs(ui: &mut Ui, logs: &[(Level, String)]) {
 
 #[derive(Default)]
 pub struct Settings {
-    tune: [f32; 3],
+    kp: [f32; 3],
+    ki: [f32; 3],
+    kd: [f32; 3],
 }
 
 pub fn draw_settings(
@@ -262,17 +264,23 @@ pub fn draw_settings(
     ui.add_space(16.);
 
     ui.label(RichText::new("Tune").strong());
-    ui.columns(3, |cols| {
-        for (i, col) in cols.iter_mut().enumerate() {
-            col.add(egui::DragValue::new(&mut settings.tune[i]).max_decimals(4));
+    ui.columns(4, |cols| {
+        cols[0].label("kp");
+        cols[0].label("ki");
+        cols[0].label("kd");
+
+        for (i, col) in cols[1..].iter_mut().enumerate() {
+            col.add(egui::DragValue::new(&mut settings.kp[i]).max_decimals(4));
+            col.add(egui::DragValue::new(&mut settings.ki[i]).max_decimals(4));
+            col.add(egui::DragValue::new(&mut settings.kd[i]).max_decimals(4));
         }
     });
     let update_button = ui.add_sized([ui.available_width(), 0.0], Button::new("Send"));
     if update_button.clicked() {
         remote_msgs.write(RemoteMessage(RemoteRequest::SetTune {
-            kp: settings.tune,
-            ki: settings.tune,
-            kd: settings.tune,
+            kp: settings.kp,
+            ki: settings.ki,
+            kd: settings.kd,
         }));
     }
 
