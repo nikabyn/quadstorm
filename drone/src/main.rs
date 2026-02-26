@@ -7,7 +7,7 @@
 )]
 
 extern crate alloc;
-use defmt_rtt as _;
+use drone::defmt::defmt_data_to_drone_responses;
 use drone::{motors, sensor_fusion};
 use embassy_futures::select::{Either, select};
 use embassy_sync::{channel, zerocopy_channel};
@@ -67,6 +67,7 @@ async fn main(spawner: Spawner) -> ! {
             drone.receiver(),
             remote.sender(),
         ));
+        spawner.must_spawn(defmt_data_to_drone_responses(drone.sender()));
 
         (remote.receiver(), drone.sender())
     };

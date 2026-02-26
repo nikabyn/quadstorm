@@ -1,4 +1,5 @@
 #![no_std]
+pub mod defmt;
 pub mod esp_ikarus;
 pub mod motors;
 pub mod sensor_fusion;

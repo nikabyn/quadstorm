@@ -74,9 +74,20 @@ pub fn rtt_communication_system(
         )
     }));
 
-    // Receive, decode drone logs
+    // Receive, decode drone responses
     let data = rtt_state.receive(1)?;
-    drone_defmt.decoder.received(&data);
+    drone_res_decoder.receive(|buffer| {
+        let len = data.len().min(buffer.len());
+        buffer[..len].copy_from_slice(&data[..len]);
+        len
+    });
+    for res in &mut drone_res_decoder {
+        if let DroneResponse::Log(data) = &res {
+            drone_defmt.decoder.received(data);
+        } else {
+            drone_msgs.write(DroneMessage(res));
+        }
+    }
     let lines = drone_defmt.decode_all()?;
     logs.write_batch(lines.into_iter().map(|(level, message)| {
         LogMessage(
@@ -85,17 +96,6 @@ pub fn rtt_communication_system(
             message,
         )
     }));
-
-    // Receive, decode drone responses
-    let data = rtt_state.receive(2)?;
-    drone_res_decoder.receive(|buffer| {
-        let len = data.len().min(buffer.len());
-        buffer[..len].copy_from_slice(&data[..len]);
-        len
-    });
-    for res in &mut drone_res_decoder {
-        drone_msgs.write(DroneMessage(res));
-    }
 
     Ok(())
 }

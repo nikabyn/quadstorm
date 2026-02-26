@@ -15,7 +15,6 @@ use defmt::info;
 use embassy_executor::Spawner;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::{Receiver, Sender};
-use embassy_time::{Duration, Ticker};
 use esp_hal::peripherals::{Peripherals, SW_INTERRUPT, TIMG0};
 use esp_hal::timer::timg::TimerGroup;
 use esp_hal::{clock::CpuClock, peripherals::WIFI};
@@ -44,10 +43,6 @@ async fn main(spawner: Spawner) -> ! {
             }
             1: {
                 size: 1024,
-                name: "defmt_drone",
-            }
-            2: {
-                size: 1024,
                 name: "drone_res",
             }
         }
@@ -64,7 +59,7 @@ async fn main(spawner: Spawner) -> ! {
     init_rtos(peripherals.TIMG0, peripherals.SW_INTERRUPT).await;
     info!("Embassy initialized!");
 
-    let (_drone_responses, _remote_requests) = {
+    let (drone_res, remote_req) = {
         let remote = mpmc_channel!(RemoteRequest, 64);
         let drone = mpmc_channel!(DroneResponse, 64);
 
@@ -73,60 +68,13 @@ async fn main(spawner: Spawner) -> ! {
             remote.receiver(),
             drone.sender(),
         ));
-        spawner.must_spawn(rtt_communicate(
-            channels.up.2,
-            channels.down.0,
-            remote.sender(),
-            drone.receiver(),
-        ));
 
         (drone.receiver(), remote.sender())
     };
 
-    let mut ticker = Ticker::every(Duration::from_millis(2000));
-    // let mut last_ping_sent = None;
-
-    loop {
-        let _result = ticker.next().await;
-
-        // TODO: Do extra pings?
-
-        // match drone_res {
-        //     DroneResponse::Pong => {
-        //         if let Some(roundtrip_start) = last_ping_sent.take() {
-        //             info!(
-        //                 "Roundtrip time: {}ms",
-        //                 roundtrip_start.elapsed().as_millis()
-        //             );
-        //         }
-        //     }
-        //     DroneResponse::Log(content) => {
-        //         info!("Log: {}", content);
-        //     }
-        //     _ => {
-        //         error!("Unexpected response: {}", drone_res);
-        //     }
-        // }
-    }
-}
-
-#[embassy_executor::task]
-async fn esp_now_communicate(
-    wifi: WIFI<'static>,
-    outgoing: Receiver<'static, CriticalSectionRawMutex, RemoteRequest, 64>,
-    incoming: Sender<'static, CriticalSectionRawMutex, DroneResponse, 64>,
-) {
-    common_esp::communicate(wifi, outgoing, incoming).await
-}
-
-#[embassy_executor::task]
-async fn rtt_communicate(
-    mut upchannel: rtt_target::UpChannel,
-    mut downchannel: rtt_target::DownChannel,
-    outgoing: Sender<'static, CriticalSectionRawMutex, RemoteRequest, 64>,
-    incoming: Receiver<'static, CriticalSectionRawMutex, DroneResponse, 64>,
-) {
     let mut req_decoder = FrameStreamDecoder::<RemoteRequest>::default();
+    let mut upchannel = channels.up.1;
+    let mut downchannel = channels.down.0;
 
     loop {
         // Relay outgoing requests to drone
@@ -138,17 +86,26 @@ async fn rtt_communicate(
                 continue;
             }
             info!("Relaying(to drone): {}", &req);
-            outgoing.send(req).await;
+            remote_req.send(req).await;
         }
 
         // Relay incoming responses to remote
-        while let Ok(res) = incoming.try_receive() {
+        while let Ok(res) = drone_res.try_receive() {
             info!("Relaying(to remote): {}", res);
             upchannel.write(&Frame::encode(&res).unwrap());
         }
 
         embassy_futures::yield_now().await;
     }
+}
+
+#[embassy_executor::task]
+async fn esp_now_communicate(
+    wifi: WIFI<'static>,
+    outgoing: Receiver<'static, CriticalSectionRawMutex, RemoteRequest, 64>,
+    incoming: Sender<'static, CriticalSectionRawMutex, DroneResponse, 64>,
+) {
+    common_esp::communicate(wifi, outgoing, incoming).await
 }
 
 async fn init_esp() -> Peripherals {
