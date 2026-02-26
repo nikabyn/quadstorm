@@ -40,19 +40,19 @@ pub fn custom_halt() -> ! {
 }
 
 const MOTOR_FRONT_LEFT_IDX: usize = 1;
-const MOTOR_FRONT_LEFT_REV: bool = false;
+const MOTOR_FRONT_LEFT_REV: bool = true;
 
 const MOTOR_FRONT_RIGHT_IDX: usize = 2;
-const MOTOR_FRONT_RIGHT_REV: bool = true;
+const MOTOR_FRONT_RIGHT_REV: bool = false;
 
 const MOTOR_BACK_RIGHT_IDX: usize = 3;
-const MOTOR_BACK_RIGHT_REV: bool = false;
+const MOTOR_BACK_RIGHT_REV: bool = true;
 
 const MOTOR_BACK_LEFT_IDX: usize = 0;
-const MOTOR_BACK_LEFT_REV: bool = true;
+const MOTOR_BACK_LEFT_REV: bool = false;
 
 const UNCONFIRMED_ARM_TIME: Duration = Duration::from_millis(500);
-const IDLE_THRUST: f32 = 100.0;
+const IDLE_THRUST: f32 = 70.0;
 
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {

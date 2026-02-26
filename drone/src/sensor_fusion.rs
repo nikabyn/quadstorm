@@ -5,7 +5,7 @@ use crate::ImuSample;
 type F = f32;
 
 const IMU_AXIS_MAP: [usize; 3] = [0, 1, 2];
-const IMU_AXIS_SCALE: [F; 3] = [1.0, 1.0, 1.0];
+const IMU_AXIS_SCALE: [F; 3] = [-1.0, 1.0, 1.0];
 
 pub struct Pid {
     // tune
