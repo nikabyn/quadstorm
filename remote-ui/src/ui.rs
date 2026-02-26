@@ -1,5 +1,5 @@
 use bevy::ecs::message::{MessageReader, MessageWriter};
-use bevy::ecs::system::Res;
+use bevy::ecs::system::{Res, ResMut};
 use bevy::ecs::{prelude::Result as BevyResult, system::Local};
 use bevy::log::Level;
 use bevy::time::Time;
@@ -8,14 +8,15 @@ use bevy_egui::egui::{self, Button, Color32, RichText, ScrollArea, Ui};
 use common_messages::{DroneResponse, RemoteRequest};
 use egui_plot::PlotPoint;
 
-use crate::PingStatus;
 use crate::rtt::{DroneMessage, LogMessage, LogSource, RemoteMessage};
+use crate::{KeepArmed, PingStatus};
 
 pub fn ui_system(
     // External state
     time: Res<Time>,
     mut contexts: EguiContexts,
     ping_status: Res<PingStatus>,
+    mut keep_armed: ResMut<KeepArmed>,
 
     // Internal state
     mut active_tab: Local<usize>,
@@ -69,7 +70,7 @@ pub fn ui_system(
         .exact_width(300.0)
         .show(ctx, |ui| {
             ui.take_available_width();
-            draw_settings(ui, &mut settings, remote_msgs);
+            draw_settings(ui, &mut settings, &mut keep_armed.0, remote_msgs);
         });
 
     egui::TopBottomPanel::new(egui::panel::TopBottomSide::Top, "panel_top")
@@ -94,11 +95,11 @@ pub fn draw_navbar(ui: &mut Ui, active_tab: &mut usize) {
             .iter()
             .enumerate()
             .map(|(i, &label)| {
+                let text = RichText::new(label).strong().size(14.0);
                 let button = if *active_tab == i {
-                    Button::new(RichText::new(label).color(Color32::WHITE))
-                        .fill(Color32::from_rgb(86, 79, 173))
+                    Button::new(text.color(Color32::WHITE)).fill(Color32::from_rgb(86, 79, 173))
                 } else {
-                    Button::new(label)
+                    Button::new(text)
                 }
                 .min_size(egui::Vec2::new(0., 24.));
                 (i, ui.add(button))
@@ -233,6 +234,7 @@ pub struct Settings {
 pub fn draw_settings(
     ui: &mut Ui,
     settings: &mut Settings,
+    keep_armed: &mut bool,
     mut remote_msgs: MessageWriter<RemoteMessage>,
 ) {
     ui.add_space(8.);
@@ -241,13 +243,15 @@ pub fn draw_settings(
     ui.add_space(16.);
 
     ui.label(RichText::new("Arming").strong());
-    let arm_button = ui.add_sized([ui.available_width(), 0.0], Button::new("Send arm"));
-    if arm_button.clicked() {
-        remote_msgs.write(RemoteMessage(RemoteRequest::SetArm(true)));
-    }
-    let disarm_button = ui.add_sized([ui.available_width(), 0.0], Button::new("Send disarm"));
-    if disarm_button.clicked() {
-        remote_msgs.write(RemoteMessage(RemoteRequest::SetArm(false)));
+    let arming_text = if *keep_armed {
+        "Send disarm"
+    } else {
+        "Send arm"
+    };
+    let arming_button = ui.add_sized([ui.available_width(), 0.0], Button::new(arming_text));
+    if arming_button.clicked() {
+        *keep_armed = !*keep_armed;
+        remote_msgs.write(RemoteMessage(RemoteRequest::SetArm(*keep_armed)));
     }
 
     ui.add_space(16.);
