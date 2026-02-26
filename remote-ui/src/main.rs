@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Result as AnyResult, anyhow};
 use bevy::DefaultPlugins;
@@ -20,7 +20,7 @@ use bevy::prelude::Result as BevyResult;
 use bevy::time::Time;
 use bevy_egui::egui::Color32;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
-use common_messages::{DroneResponse, RemoteRequest, Telemetry};
+use common_messages::{DroneResponse, PingId, PingTarget, RemoteRequest, Telemetry};
 
 mod rtt;
 use rtt::{
@@ -52,14 +52,21 @@ fn main() -> AnyResult<()> {
         .insert_resource(KeepArmed(false))
         .insert_resource(ElfResource::<RelayTag>::new(relay_elf_path)?)
         .insert_resource(ElfResource::<DroneTag>::new(drone_elf_path)?)
+        .insert_resource(PingStatus::default())
         .add_message::<RemoteMessage>()
         .add_message::<DroneMessage>()
         .add_message::<LogMessage>()
         .add_systems(Startup, setup_camera_system)
         .add_systems(EguiPrimaryContextPass, ui_system)
         .add_systems(Update, (keyboard_input_system, gamepad_input_system))
-        .add_systems(FixedUpdate, rtt_communication_system.pipe(log_error_system))
-        .add_systems(FixedUpdate, keep_armed_system)
+        .add_systems(
+            FixedUpdate,
+            (
+                rtt_communication_system.pipe(log_error_system),
+                keep_armed_system,
+                ping_pong_system,
+            ),
+        )
         .add_systems(FixedPostUpdate, log_logs)
         .run();
 
@@ -107,27 +114,78 @@ fn keep_armed_system(
     }
 }
 
+#[derive(Resource, Default)]
+struct PingStatus {
+    roundtrip_relay: Option<Duration>,
+    pings_relay: Vec<(PingId, Duration)>,
+    roundtrip_drone: Option<Duration>,
+    pings_drone: Vec<(PingId, Duration)>,
+    next_id: PingId,
+}
+
+fn ping_pong_system(
+    mut ping_status: ResMut<PingStatus>,
+    time: Res<Time>,
+    mut time_last_sent: Local<Duration>,
+    mut remote_msgs: MessageWriter<RemoteMessage>,
+    mut drone_msgs: MessageReader<DroneMessage>,
+) {
+    let current = time.elapsed();
+
+    for DroneMessage(res) in drone_msgs.read() {
+        let DroneResponse::Pong(pong_src, pong_id) = res else {
+            continue;
+        };
+
+        let pings = match pong_src {
+            PingTarget::Relay => &mut ping_status.pings_relay,
+            PingTarget::Drone => &mut ping_status.pings_drone,
+        };
+
+        let Some((_, sent_time)) = pings.iter().find(|(id, _)| id == pong_id).cloned() else {
+            warn!("Received unkown Pong({pong_src:?}, {pong_id})");
+            continue;
+        };
+        pings.retain(|(id, _)| id != pong_id);
+
+        match pong_src {
+            PingTarget::Relay => ping_status.roundtrip_relay = Some(current - sent_time),
+            PingTarget::Drone => ping_status.roundtrip_drone = Some(current - sent_time),
+        };
+    }
+
+    if (current - *time_last_sent) >= Duration::from_millis(500) {
+        *time_last_sent = current;
+        let ping_id = ping_status.next_id;
+
+        remote_msgs.write_batch([
+            RemoteMessage(RemoteRequest::Ping(PingTarget::Relay, ping_id)),
+            RemoteMessage(RemoteRequest::Ping(PingTarget::Drone, ping_id)),
+        ]);
+        ping_status.pings_relay.push((ping_id, current));
+        ping_status.pings_drone.push((ping_id, current));
+
+        ping_status.next_id = ping_id.wrapping_add(1);
+    }
+
+    if ping_status.pings_relay.len() > 2 {
+        ping_status.roundtrip_relay = None;
+        ping_status.pings_relay.clear();
+    }
+    if ping_status.pings_drone.len() > 2 {
+        ping_status.roundtrip_drone = None;
+        ping_status.pings_drone.clear();
+    }
+}
+
 fn keyboard_input_system(
     mut inputs: MessageReader<KeyboardInput>,
-    mut remote_msgs: MessageWriter<RemoteMessage>,
-    mut keep_armed: ResMut<KeepArmed>,
     mut exit: MessageWriter<AppExit>,
 ) {
     for input in inputs.read().filter(|i| i.state == ButtonState::Released) {
         match input.key_code {
             KeyCode::Escape | KeyCode::KeyQ => {
                 exit.write(AppExit::Success);
-            }
-            KeyCode::KeyA => {
-                keep_armed.0 = true;
-                remote_msgs.write(RemoteMessage(RemoteRequest::SetArm(true)));
-            }
-            KeyCode::KeyD => {
-                keep_armed.0 = false;
-                remote_msgs.write(RemoteMessage(RemoteRequest::SetArm(false)));
-            }
-            KeyCode::KeyP => {
-                remote_msgs.write(RemoteMessage(RemoteRequest::Ping));
             }
             _ => {}
         };

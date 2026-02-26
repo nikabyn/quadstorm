@@ -1,17 +1,22 @@
 use bevy::ecs::message::{MessageReader, MessageWriter};
+use bevy::ecs::system::Res;
 use bevy::ecs::{prelude::Result as BevyResult, system::Local};
 use bevy::log::info;
+use bevy::time::Time;
 use bevy_egui::EguiContexts;
-use bevy_egui::egui::{self, Button, Color32, Ui};
+use bevy_egui::egui::{self, Button, Color32, RichText, Stroke, Ui};
 use common_messages::{DroneResponse, RemoteRequest};
 use egui_plot::PlotPoint;
 
+use crate::PingStatus;
 use crate::rtt::{DroneMessage, RemoteMessage};
 
 pub fn ui_system(
+    time: Res<Time>,
     mut contexts: EguiContexts,
     mut active_tab: Local<usize>,
     mut settings: Local<Settings>,
+    ping_status: Res<PingStatus>,
     mut telemetry: Local<CollectedTelemetry>,
     mut drone_msgs: MessageReader<DroneMessage>,
     remote_msgs: MessageWriter<RemoteMessage>,
@@ -19,7 +24,7 @@ pub fn ui_system(
     for DroneMessage(drone_res) in drone_msgs.read() {
         if let &DroneResponse::Telemetry(sample) = drone_res {
             info!("{sample}");
-            let t = sample.timestamp as f64;
+            let t = time.elapsed().as_millis() as f64;
 
             for i in 0..3 {
                 telemetry.orientation[i].push(PlotPoint::new(t, sample.orientation[i] as f64));
@@ -44,7 +49,7 @@ pub fn ui_system(
 
     egui::TopBottomPanel::new(egui::panel::TopBottomSide::Bottom, "panel_bottom")
         .show_separator_line(true)
-        .show(ctx, |ui| draw_statusbar(ui));
+        .show(ctx, |ui| draw_statusbar(ui, &ping_status));
 
     egui::SidePanel::new(egui::panel::Side::Right, "panel_right")
         .resizable(true)
@@ -72,12 +77,13 @@ pub fn draw_navbar(ui: &mut Ui, active_tab: &mut usize) {
             .iter()
             .enumerate()
             .map(|(i, &label)| {
-                let button = egui::Button::new(label).min_size(egui::Vec2::new(0., 24.));
                 let button = if *active_tab == i {
-                    button.fill(Color32::PURPLE)
+                    Button::new(RichText::new(label).color(Color32::WHITE))
+                        .fill(Color32::from_rgb(86, 79, 173))
                 } else {
-                    button
-                };
+                    Button::new(label)
+                }
+                .min_size(egui::Vec2::new(0., 24.));
                 (i, ui.add(button))
             })
             .map(|(i, response)| response.clicked().then_some(i))
@@ -90,11 +96,34 @@ pub fn draw_navbar(ui: &mut Ui, active_tab: &mut usize) {
     });
 }
 
-pub fn draw_statusbar(ui: &mut Ui) {
+pub fn draw_statusbar(ui: &mut Ui, ping_status: &PingStatus) {
     ui.horizontal(|ui| {
         ui.label("Drone: ");
+        if let Some(rtt) = ping_status.roundtrip_drone {
+            ui.label(
+                RichText::new(format!("Connected, rtt={}ms", rtt.as_millis()))
+                    .color(Color32::LIGHT_GREEN),
+            );
+        } else {
+            ui.label(RichText::new("Not connected").color(Color32::LIGHT_RED));
+        }
+
+        ui.add_space(8.0);
+
         ui.label("Relay: ");
+        if let Some(rtt) = ping_status.roundtrip_relay {
+            ui.label(
+                RichText::new(format!("Connected, rtt={}ms", rtt.as_millis()))
+                    .color(Color32::LIGHT_GREEN),
+            );
+        } else {
+            ui.label(RichText::new("Not connected").color(Color32::LIGHT_RED));
+        }
+
+        ui.add_space(8.0);
+
         ui.label("Controller: ");
+        ui.label(RichText::new("Not connected").color(Color32::LIGHT_RED));
     });
 }
 
@@ -171,6 +200,19 @@ pub fn draw_settings(
 ) {
     ui.add_space(8.);
     ui.label("Settings");
+
+    ui.add_space(16.);
+
+    ui.label("Arming");
+    let arm_button = ui.add_sized([ui.available_width(), 0.0], Button::new("Send arm"));
+    if arm_button.clicked() {
+        remote_msgs.write(RemoteMessage(RemoteRequest::SetArm(true)));
+    }
+    let disarm_button = ui.add_sized([ui.available_width(), 0.0], Button::new("Send disarm"));
+    if disarm_button.clicked() {
+        remote_msgs.write(RemoteMessage(RemoteRequest::SetArm(false)));
+    }
+
     ui.add_space(16.);
 
     ui.label("Tune");
@@ -193,6 +235,6 @@ pub fn draw_settings(
     ui.label("Reset");
     let reset_button = ui.add_sized([ui.available_width(), 0.0], Button::new("Send"));
     if reset_button.clicked() {
-        // remote_msgs.write(RemoteMessage(RemoteRequest::Reset));
+        remote_msgs.write(RemoteMessage(RemoteRequest::Reset));
     }
 }

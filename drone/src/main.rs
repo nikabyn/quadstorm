@@ -25,7 +25,7 @@ use esp_hal::peripherals::{Peripherals, SW_INTERRUPT, TIMG0, WIFI};
 use esp_hal::timer::timg::TimerGroup;
 
 use common_esp::{mpmc_channel, spsc_channel};
-use common_messages::{DroneResponse, RemoteRequest, Telemetry};
+use common_messages::{DroneResponse, PingTarget, RemoteRequest, Telemetry};
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
@@ -237,8 +237,8 @@ async fn handle_remote_requests(
         };
 
         match remote_req {
-            RemoteRequest::Ping => {
-                drone_responses.send(DroneResponse::Pong).await;
+            RemoteRequest::Ping(target @ PingTarget::Drone, id) => {
+                drone_responses.send(DroneResponse::Pong(target, id)).await;
             }
             RemoteRequest::SetArm(true) => {
                 if thrust > 10.0 {
@@ -265,7 +265,7 @@ async fn handle_remote_requests(
                 if armed {
                     arm_ticker.reset();
                 } else {
-                    warn!("tried to arm confirm on unarmed drone");
+                    warn!("tried to arm confirm unarmed drone");
                 }
             }
             RemoteRequest::SetThrust(new_thrust) => {
@@ -283,7 +283,13 @@ async fn handle_remote_requests(
                 *inputs.send().await = Input::Tune { kp, ki, kd };
                 inputs.send_done();
             }
-            _ => warn!("unknown remote request received"),
+            RemoteRequest::Reset => {
+                if armed && thrust > 10.0 {
+                    warn!("tried to reset armed and active drone");
+                }
+                esp_hal::system::software_reset();
+            }
+            req => warn!("unknown remote request received: {}", req),
         }
     }
 }

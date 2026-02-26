@@ -22,7 +22,7 @@ use esp_hal::{clock::CpuClock, peripherals::WIFI};
 use rtt_target::{rtt_init, set_defmt_channel};
 
 use common_esp::mpmc_channel;
-use common_messages::{DroneResponse, Frame, FrameStreamDecoder, RemoteRequest};
+use common_messages::{DroneResponse, Frame, FrameStreamDecoder, PingTarget, RemoteRequest};
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
@@ -132,6 +132,11 @@ async fn rtt_communicate(
         // Relay outgoing requests to drone
         req_decoder.receive(|buffer| downchannel.read(buffer));
         for req in &mut req_decoder {
+            if let RemoteRequest::Ping(target @ PingTarget::Relay, ping_id) = &req {
+                let res = DroneResponse::Pong(*target, *ping_id);
+                upchannel.write(&Frame::encode(&res).unwrap());
+                continue;
+            }
             info!("Relaying(to drone): {}", &req);
             outgoing.send(req).await;
         }

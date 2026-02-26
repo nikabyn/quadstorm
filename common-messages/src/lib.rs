@@ -11,7 +11,7 @@ use wincode::{SchemaRead, SchemaReadOwned, SchemaWrite};
 #[derive(Debug, Format, SchemaWrite, SchemaRead, PartialEq)]
 #[non_exhaustive]
 pub enum RemoteRequest {
-    Ping,
+    Ping(PingTarget, PingId),
     SetArm(bool),
     ArmConfirm,
     SetThrust(f32),
@@ -21,12 +21,20 @@ pub enum RemoteRequest {
         ki: [f32; 3],
         kd: [f32; 3],
     },
+    Reset,
 }
+
+#[derive(Debug, Format, SchemaWrite, SchemaRead, PartialEq, Eq, Clone, Copy)]
+pub enum PingTarget {
+    Relay,
+    Drone,
+}
+pub type PingId = u32;
 
 #[derive(Debug, Format, SchemaWrite, SchemaRead, PartialEq)]
 #[non_exhaustive]
 pub enum DroneResponse {
-    Pong,
+    Pong(PingTarget, u32),
     ArmState(bool),
     Telemetry(Telemetry),
     Log(Box<[u8]>),
@@ -239,7 +247,7 @@ fn encode_decode_roundtrip() {
         assert_eq!(Frame::decode(&Frame::encode(&v).unwrap()), Ok(v));
     }
 
-    roundtrip(RemoteRequest::Ping);
+    roundtrip(RemoteRequest::Ping(PingTarget::Relay, 0xab));
     roundtrip(RemoteRequest::ArmConfirm);
     roundtrip(RemoteRequest::SetArm(true));
     roundtrip(RemoteRequest::SetArm(false));
@@ -249,7 +257,7 @@ fn encode_decode_roundtrip() {
         kd: [80.0, 0.5, -398.3],
     });
 
-    roundtrip(DroneResponse::Pong);
+    roundtrip(DroneResponse::Pong(PingTarget::Relay, 0xab));
     roundtrip(DroneResponse::ArmState(true));
     roundtrip(DroneResponse::ArmState(false));
     roundtrip(DroneResponse::Log(Box::from([0, 1, 2, 3])));
@@ -268,9 +276,9 @@ fn stream_decode() {
         })
         .unwrap(),
     );
-    data.extend_from_slice(&Frame::encode(&RemoteRequest::Ping).unwrap());
+    data.extend_from_slice(&Frame::encode(&RemoteRequest::Ping(PingTarget::Relay, 0xab)).unwrap());
     data.extend_from_slice(&Frame::encode(&RemoteRequest::ArmConfirm).unwrap());
-    data.extend_from_slice(&Frame::encode(&RemoteRequest::Ping).unwrap());
+    data.extend_from_slice(&Frame::encode(&RemoteRequest::Ping(PingTarget::Drone, 0xdf)).unwrap());
     data.extend_from_slice(&Frame::encode(&RemoteRequest::ArmConfirm).unwrap());
     data.extend_from_slice(&Frame::encode(&RemoteRequest::SetArm(false)).unwrap());
 
@@ -279,7 +287,7 @@ fn stream_decode() {
     data.remove(0);
     data.remove(0);
 
-    let mut decoder = FrameStreamDecoder::<RemoteRequest>::new();
+    let mut decoder = FrameStreamDecoder::<RemoteRequest>::default();
     decoder.receive(|buffer| {
         buffer[..data.len()].copy_from_slice(&data);
         data.len()
@@ -289,9 +297,9 @@ fn stream_decode() {
     assert_eq!(
         msgs,
         vec![
-            RemoteRequest::Ping,
+            RemoteRequest::Ping(PingTarget::Relay, 0xab),
             RemoteRequest::ArmConfirm,
-            RemoteRequest::Ping,
+            RemoteRequest::Ping(PingTarget::Drone, 0xdf),
             RemoteRequest::ArmConfirm,
             RemoteRequest::SetArm(false)
         ]
