@@ -1,10 +1,9 @@
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Result as AnyResult, anyhow};
 use bevy::DefaultPlugins;
 use bevy::app::{App, AppExit, FixedPostUpdate, FixedUpdate, Startup, Update};
 use bevy::camera::Camera2d;
-use bevy::ecs::component::Component;
 use bevy::ecs::message::{MessageReader, MessageWriter};
 use bevy::ecs::name::Name;
 use bevy::ecs::query::Changed;
@@ -16,11 +15,9 @@ use bevy::input::keyboard::{KeyCode, KeyboardInput};
 use bevy::input_focus::InputDispatchPlugin;
 use bevy::input_focus::tab_navigation::TabNavigationPlugin;
 use bevy::log::{Level, debug, error, error_once, info, trace, warn};
-use bevy::prelude::Result as BevyResult;
 use bevy::time::Time;
-use bevy_egui::egui::Color32;
-use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
-use common_messages::{DroneResponse, PingId, PingTarget, RemoteRequest, Telemetry};
+use bevy_egui::EguiPrimaryContextPass;
+use common_messages::{DroneResponse, PingId, PingTarget, RemoteRequest};
 
 mod rtt;
 use rtt::{
@@ -67,7 +64,7 @@ fn main() -> AnyResult<()> {
                 ping_pong_system,
             ),
         )
-        .add_systems(FixedPostUpdate, log_logs)
+        // .add_systems(FixedPostUpdate, log_logs)
         .run();
 
     Ok(())
@@ -77,6 +74,7 @@ fn setup_camera_system(mut commands: Commands) {
     commands.spawn(Camera2d);
 }
 
+#[allow(dead_code)]
 fn log_logs(mut logs: MessageReader<LogMessage>) {
     for LogMessage(source, level, message) in logs.read() {
         if *source == LogSource::Relay {

@@ -59,10 +59,6 @@ pub fn rtt_communication_system(
 
     // Send remote requests
     for (msg, _) in remote_msgs.par_read() {
-        // logs.write(LogMessage(
-        //     LogsTabKind::Remote,
-        //     Line::from(format!("Sending: {:?}", msg.0)),
-        // ));
         rtt_state.send(0, &Frame::encode(&msg.0)?)?;
     }
 

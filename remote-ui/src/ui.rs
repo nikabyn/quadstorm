@@ -1,29 +1,36 @@
 use bevy::ecs::message::{MessageReader, MessageWriter};
 use bevy::ecs::system::Res;
 use bevy::ecs::{prelude::Result as BevyResult, system::Local};
-use bevy::log::info;
+use bevy::log::Level;
 use bevy::time::Time;
 use bevy_egui::EguiContexts;
-use bevy_egui::egui::{self, Button, Color32, RichText, Stroke, Ui};
+use bevy_egui::egui::{self, Button, Color32, RichText, ScrollArea, Ui};
 use common_messages::{DroneResponse, RemoteRequest};
 use egui_plot::PlotPoint;
 
 use crate::PingStatus;
-use crate::rtt::{DroneMessage, RemoteMessage};
+use crate::rtt::{DroneMessage, LogMessage, LogSource, RemoteMessage};
 
 pub fn ui_system(
+    // External state
     time: Res<Time>,
     mut contexts: EguiContexts,
+    ping_status: Res<PingStatus>,
+
+    // Internal state
     mut active_tab: Local<usize>,
     mut settings: Local<Settings>,
-    ping_status: Res<PingStatus>,
     mut telemetry: Local<CollectedTelemetry>,
+    mut relay_logs: Local<Vec<(bevy::log::Level, String)>>,
+    mut drone_logs: Local<Vec<(bevy::log::Level, String)>>,
+
+    // Messages
     mut drone_msgs: MessageReader<DroneMessage>,
     remote_msgs: MessageWriter<RemoteMessage>,
+    mut log_msgs: MessageReader<LogMessage>,
 ) -> BevyResult {
     for DroneMessage(drone_res) in drone_msgs.read() {
         if let &DroneResponse::Telemetry(sample) = drone_res {
-            info!("{sample}");
             let t = time.elapsed().as_millis() as f64;
 
             for i in 0..3 {
@@ -44,6 +51,12 @@ pub fn ui_system(
             }
         }
     }
+    for LogMessage(src, level, message) in log_msgs.read() {
+        match src {
+            LogSource::Relay => relay_logs.push((*level, message.to_owned())),
+            LogSource::Drone => drone_logs.push((*level, message.to_owned())),
+        }
+    }
 
     let ctx = contexts.ctx_mut()?;
 
@@ -52,10 +65,8 @@ pub fn ui_system(
         .show(ctx, |ui| draw_statusbar(ui, &ping_status));
 
     egui::SidePanel::new(egui::panel::Side::Right, "panel_right")
-        .resizable(true)
-        .default_width(300.)
-        .min_width(300.)
-        .max_width(500.)
+        .resizable(false)
+        .exact_width(300.0)
         .show(ctx, |ui| {
             ui.take_available_width();
             draw_settings(ui, &mut settings, remote_msgs);
@@ -65,7 +76,13 @@ pub fn ui_system(
         .show_separator_line(false)
         .show(ctx, |ui| draw_navbar(ui, &mut active_tab));
 
-    egui::CentralPanel::default().show(ctx, |ui| draw_main(ui, active_tab, telemetry));
+    egui::CentralPanel::default().show(ctx, |ui| match *active_tab {
+        0 => draw_telemetry(ui, &telemetry),
+        1 => {}
+        2 => draw_logs(ui, &relay_logs),
+        3 => draw_logs(ui, &drone_logs),
+        _ => {}
+    });
 
     Ok(())
 }
@@ -127,12 +144,6 @@ pub fn draw_statusbar(ui: &mut Ui, ping_status: &PingStatus) {
     });
 }
 
-pub fn draw_main(ui: &mut Ui, active_tab: Local<usize>, telemetry: Local<CollectedTelemetry>) {
-    if *active_tab == 0 {
-        draw_telemetry(ui, &telemetry);
-    }
-}
-
 #[derive(Default)]
 pub struct CollectedTelemetry {
     orientation: [Vec<PlotPoint>; 3],
@@ -188,6 +199,32 @@ pub fn draw_telemetry(ui: &mut Ui, telemetry: &CollectedTelemetry) {
     });
 }
 
+fn draw_logs(ui: &mut Ui, logs: &[(Level, String)]) {
+    ScrollArea::both()
+        .animated(true)
+        .stick_to_bottom(true)
+        .show(ui, |ui| {
+            ui.take_available_space();
+            for (level, message) in logs {
+                let color = match *level {
+                    Level::TRACE => Color32::WHITE,
+                    Level::DEBUG => Color32::LIGHT_BLUE,
+                    Level::INFO => Color32::LIGHT_GREEN,
+                    Level::WARN => Color32::LIGHT_YELLOW,
+                    Level::ERROR => Color32::LIGHT_RED,
+                };
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(level.as_str().to_lowercase())
+                            .color(color)
+                            .monospace(),
+                    );
+                    ui.label(RichText::new(message).monospace());
+                });
+            }
+        });
+}
+
 #[derive(Default)]
 pub struct Settings {
     tune: [f32; 3],
@@ -199,11 +236,11 @@ pub fn draw_settings(
     mut remote_msgs: MessageWriter<RemoteMessage>,
 ) {
     ui.add_space(8.);
-    ui.label("Settings");
+    ui.label(RichText::new("Settings").size(16.0).strong());
 
     ui.add_space(16.);
 
-    ui.label("Arming");
+    ui.label(RichText::new("Arming").strong());
     let arm_button = ui.add_sized([ui.available_width(), 0.0], Button::new("Send arm"));
     if arm_button.clicked() {
         remote_msgs.write(RemoteMessage(RemoteRequest::SetArm(true)));
@@ -215,7 +252,7 @@ pub fn draw_settings(
 
     ui.add_space(16.);
 
-    ui.label("Tune");
+    ui.label(RichText::new("Tune").strong());
     ui.columns(3, |cols| {
         for (i, col) in cols.iter_mut().enumerate() {
             col.add(egui::DragValue::new(&mut settings.tune[i]).max_decimals(4));
@@ -232,7 +269,7 @@ pub fn draw_settings(
 
     ui.add_space(16.);
 
-    ui.label("Reset");
+    ui.label(RichText::new("Reset").strong());
     let reset_button = ui.add_sized([ui.available_width(), 0.0], Button::new("Send"));
     if reset_button.clicked() {
         remote_msgs.write(RemoteMessage(RemoteRequest::Reset));
