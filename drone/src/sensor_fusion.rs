@@ -19,8 +19,10 @@ pub struct Pid {
 }
 
 impl Pid {
-    fn advance(&mut self, error: F) -> F {
-        self.sum += error;
+    fn advance(&mut self, error: F, saturated: bool) -> F {
+        if !saturated || (self.sum + error).abs() < self.sum {
+            self.sum += error;
+        }
         let control = self.k_p * error + self.k_i * self.sum + self.k_d * (self.last_input - error);
         self.last_input = error;
 
@@ -92,7 +94,7 @@ impl ComplementaryFilterFusion {
         self.orientation
     }
 
-    pub fn advance(&mut self, sample: impl ImuSample) -> [F; 3] {
+    pub fn advance(&mut self, sample: impl ImuSample, saturated: bool) -> [F; 3] {
         let yaw_rotation = IMU_AXIS_SCALE[2] * sample.gyro()[IMU_AXIS_MAP[2]];
         let gyro_orientation = [
             self.orientation[0]
@@ -138,12 +140,12 @@ impl ComplementaryFilterFusion {
         self.orientation[2] = gyro_orientation[2];
 
         [
-            self.pid[0].advance(self.target[0] - self.orientation[0]),
-            self.pid[1].advance(self.target[1] - self.orientation[1]),
+            self.pid[0].advance(self.target[0] - self.orientation[0], saturated),
+            self.pid[1].advance(self.target[1] - self.orientation[1], saturated),
             // // Yaw to fixed setpoint
             // self.pid[2].advance(self.target[2] - self.orientation[2]),
             // Yaw to target rotation speed
-            self.pid[2].advance(self.target[2] - yaw_rotation),
+            self.pid[2].advance(self.target[2] - yaw_rotation, saturated),
         ]
     }
 }

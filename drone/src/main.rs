@@ -7,6 +7,8 @@
 )]
 
 extern crate alloc;
+use core::iter::zip;
+
 use drone::defmt::defmt_data_to_drone_responses;
 use drone::{motors, sensor_fusion};
 use embassy_futures::select::{Either, select};
@@ -50,6 +52,7 @@ const MOTOR_BACK_LEFT_IDX: usize = 0;
 const MOTOR_BACK_LEFT_REV: bool = true;
 
 const UNCONFIRMED_ARM_TIME: Duration = Duration::from_millis(500);
+const IDLE_THRUST: f32 = 100.0;
 
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
@@ -133,6 +136,7 @@ async fn main(spawner: Spawner) -> ! {
 
     let mut thrust = 0.0;
     let mut armed = false;
+    let mut motors_saturated = false;
 
     loop {
         if let Some(input) = inputs.try_receive() {
@@ -151,6 +155,8 @@ async fn main(spawner: Spawner) -> ! {
                     for i in 0..3 {
                         fusion.pid[i].k_p = kp[i];
                         fusion.pid[i].k_i = ki[i];
+                        // reset sum for integral term
+                        fusion.pid[i].sum = 0.0;
                         fusion.pid[i].k_d = kd[i];
                     }
                 }
@@ -169,7 +175,7 @@ async fn main(spawner: Spawner) -> ! {
             imu_sample.accl[2],
             imu_sample.time,
         );
-        let [roll, pitch, yaw] = fusion.advance(*imu_sample);
+        let [roll, pitch, yaw] = fusion.advance(*imu_sample, motors_saturated);
         imu_data.receive_done();
 
         let motor_throttles = [
@@ -177,23 +183,33 @@ async fn main(spawner: Spawner) -> ! {
             thrust + roll - pitch - yaw,
             thrust + roll + pitch + yaw,
             thrust - roll + pitch - yaw,
-        ]
-        // .map(|f| f.clamp(-1000.0, 1000.0));
-        .map(|f| f.clamp(100.0, 1000.0));
+        ];
 
-        let mapped_motor_throttles = map_motor_throttles(motor_throttles);
+        let clamped_throttles = motor_throttles
+            // .map(|f| f.clamp(-1000.0, 1000.0));
+            .map(|f| f.clamp(IDLE_THRUST, 1000.0));
+
+        motors_saturated =
+            zip(motor_throttles, clamped_throttles).any(|(raw, clamped)| raw >= clamped);
+
+        let mapped_motor_throttles = map_motor_throttles(clamped_throttles);
         if armed {
             motors.send_throttles(mapped_motor_throttles).await;
         } else {
             motors.send_throttles([1000; 4]).await;
         }
 
+        if !armed || thrust < IDLE_THRUST {
+            // reset PID integrator when disarmed or low thrust
+            fusion.pid.iter_mut().for_each(|pid| pid.sum = 0.0);
+        }
+
         if let Some(msg) = telemetry.try_send() {
             *msg = Telemetry {
                 timestamp: Instant::now().as_millis(),
                 orientation: fusion.orientation(),
-                thrust: thrust,
-                armed: armed,
+                thrust,
+                armed,
                 output: [roll, pitch, yaw],
                 throttles: mapped_motor_throttles,
             };
