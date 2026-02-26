@@ -3,7 +3,7 @@ use core::marker::PhantomData;
 use defmt::error;
 use embassy_time::{Duration, Instant};
 use esp_hal::{
-    Async,
+    Blocking,
     gpio::{Level, Output, OutputConfig, OutputPin, interconnect::PeripheralOutput},
     peripherals::RMT,
     rmt::{Channel, PulseCode, Rmt, Tx, TxChannelConfig, TxChannelCreator},
@@ -72,7 +72,7 @@ impl Protocol for OneShot42 {
 }
 
 pub struct Motors<Protocol> {
-    data: Channel<'static, Async, Tx>,
+    data: Channel<'static, Blocking, Tx>,
     mux_slct: [Output<'static>; 2],
     protocol: PhantomData<Protocol>,
 }
@@ -83,7 +83,7 @@ impl<Proto: Protocol> Motors<Proto> {
         data_pin: impl PeripheralOutput<'static>,
         mux_slct: (impl OutputPin + 'static, impl OutputPin + 'static),
     ) -> Self {
-        let rmt = Rmt::new(rmt, Proto::RATE).expect("rmt setup").into_async();
+        let rmt = Rmt::new(rmt, Proto::RATE).expect("rmt setup");
         let channel = rmt
             .channel0
             .configure_tx(
@@ -107,34 +107,41 @@ impl<Proto: Protocol> Motors<Proto> {
         }
     }
 
-    async fn send_esc_value(&mut self, value: u16) {
+    fn send_esc_value(&mut self, value: u16) {
         let pulse = Proto::encode_pulse(value);
-        if let Err(e) = self.data.transmit(pulse.as_ref()).await {
-            error!("unable to transmit rmt pulse: {:?}", e);
+
+        let channel = self.data.reborrow();
+
+        if let Err(e) = channel
+            .transmit(pulse.as_ref())
+            .map(|tx| tx.wait().map_err(|(e, _)| e))
+        {
+            error!("unable to transmit rmt pulse: {:?}", e)
         }
     }
 
-    pub async fn send_esc_values(&mut self, values: [u16; 4]) {
-        self.mux_slct[0].set_low();
-        self.mux_slct[1].set_low();
-        self.send_esc_value(values[0]).await;
+    pub fn send_esc_values(&mut self, values: [u16; 4]) {
+        critical_section::with(|_cs| {
+            self.mux_slct[0].set_low();
+            self.mux_slct[1].set_low();
+            self.send_esc_value(values[0]);
 
-        self.mux_slct[0].set_low();
-        self.mux_slct[1].set_high();
-        self.send_esc_value(values[1]).await;
+            self.mux_slct[0].set_low();
+            self.mux_slct[1].set_high();
+            self.send_esc_value(values[1]);
 
-        self.mux_slct[0].set_high();
-        self.mux_slct[1].set_low();
-        self.send_esc_value(values[2]).await;
+            self.mux_slct[0].set_high();
+            self.mux_slct[1].set_low();
+            self.send_esc_value(values[2]);
 
-        self.mux_slct[1].set_high();
-        self.mux_slct[1].set_high();
-        self.send_esc_value(values[3]).await;
+            self.mux_slct[1].set_high();
+            self.mux_slct[1].set_high();
+            self.send_esc_value(values[3]);
+        })
     }
 
-    pub async fn send_throttles(&mut self, throttles: [u16; 4]) {
+    pub fn send_throttles(&mut self, throttles: [u16; 4]) {
         self.send_esc_values(throttles.map(Proto::throttle_transform))
-            .await
     }
 }
 
@@ -142,7 +149,7 @@ impl<Proto: OneShot> Motors<Proto> {
     pub async fn arm_oneshot(&mut self) {
         let end = Instant::now().saturating_add(Duration::from_secs(3));
         while Instant::now() <= end {
-            self.send_throttles([1000; 4]).await;
+            self.send_throttles([1000; 4]);
         }
     }
 }

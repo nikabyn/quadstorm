@@ -194,9 +194,9 @@ async fn main(spawner: Spawner) -> ! {
 
         let mapped_motor_throttles = map_motor_throttles(clamped_throttles);
         if armed {
-            motors.send_throttles(mapped_motor_throttles).await;
+            motors.send_throttles(mapped_motor_throttles);
         } else {
-            motors.send_throttles([1000; 4]).await;
+            motors.send_throttles([1000; 4]);
         }
 
         if !armed || thrust < IDLE_THRUST {
