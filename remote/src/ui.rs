@@ -9,13 +9,14 @@ use common_messages::{DroneResponse, RemoteRequest};
 use egui_plot::PlotPoint;
 
 use crate::rtt::{DroneMessage, LogMessage, LogSource, RemoteMessage};
-use crate::{KeepArmed, PingStatus};
+use crate::{GamepadStatus, KeepArmed, PingStatus};
 
 pub fn ui_system(
     // External state
     time: Res<Time>,
     mut contexts: EguiContexts,
     ping_status: Res<PingStatus>,
+    gamepad_status: Res<GamepadStatus>,
     mut keep_armed: ResMut<KeepArmed>,
 
     // Internal state
@@ -63,7 +64,7 @@ pub fn ui_system(
 
     egui::TopBottomPanel::new(egui::panel::TopBottomSide::Bottom, "panel_bottom")
         .show_separator_line(true)
-        .show(ctx, |ui| draw_statusbar(ui, &ping_status));
+        .show(ctx, |ui| draw_statusbar(ui, &ping_status, &gamepad_status));
 
     egui::SidePanel::new(egui::panel::Side::Right, "panel_right")
         .resizable(false)
@@ -114,7 +115,7 @@ pub fn draw_navbar(ui: &mut Ui, active_tab: &mut usize) {
     });
 }
 
-pub fn draw_statusbar(ui: &mut Ui, ping_status: &PingStatus) {
+pub fn draw_statusbar(ui: &mut Ui, ping_status: &PingStatus, gamepad_status: &GamepadStatus) {
     ui.horizontal(|ui| {
         ui.label("Drone: ");
         if let Some(rtt) = ping_status.roundtrip_drone {
@@ -141,7 +142,11 @@ pub fn draw_statusbar(ui: &mut Ui, ping_status: &PingStatus) {
         ui.add_space(8.0);
 
         ui.label("Controller: ");
-        ui.label(RichText::new("Not connected").color(Color32::LIGHT_RED));
+        match (gamepad_status.connected, gamepad_status.had_input) {
+            (true, true) => ui.label(RichText::new("Connected").color(Color32::LIGHT_GREEN)),
+            (true, false) => ui.label(RichText::new("Thrust uninitialized").color(Color32::ORANGE)),
+            (false, _) => ui.label(RichText::new("Not connected").color(Color32::LIGHT_RED)),
+        };
     });
 }
 

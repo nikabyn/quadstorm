@@ -10,7 +10,9 @@ use bevy::ecs::query::Changed;
 use bevy::ecs::resource::Resource;
 use bevy::ecs::system::{Commands, IntoSystem, Local, Query, Res, ResMut};
 use bevy::input::ButtonState;
-use bevy::input::gamepad::{Gamepad, GamepadAxis, GamepadButton};
+use bevy::input::gamepad::{
+    Gamepad, GamepadAxis, GamepadAxisChangedEvent, GamepadButton, GamepadConnectionEvent,
+};
 use bevy::input::keyboard::{KeyCode, KeyboardInput};
 use bevy::input_focus::InputDispatchPlugin;
 use bevy::input_focus::tab_navigation::TabNavigationPlugin;
@@ -49,6 +51,7 @@ fn main() -> AnyResult<()> {
         .insert_resource(KeepArmed(false))
         .insert_resource(ElfResource::<RelayTag>::new(relay_elf_path)?)
         .insert_resource(ElfResource::<DroneTag>::new(drone_elf_path)?)
+        .insert_resource(GamepadStatus::default())
         .insert_resource(PingStatus::default())
         .add_message::<RemoteMessage>()
         .add_message::<DroneMessage>()
@@ -190,11 +193,36 @@ fn keyboard_input_system(
     }
 }
 
+#[derive(Resource, Default)]
+struct GamepadStatus {
+    connected: bool,
+    had_input: bool,
+}
+
 fn gamepad_input_system(
     gamepads: Query<(&Name, &Gamepad), Changed<Gamepad>>,
-    mut remote_msgs: MessageWriter<RemoteMessage>,
     mut keep_armed: ResMut<KeepArmed>,
+    mut gamepad_status: ResMut<GamepadStatus>,
+    mut connection_events: MessageReader<GamepadConnectionEvent>,
+    mut axis_events: MessageReader<GamepadAxisChangedEvent>,
+    mut remote_msgs: MessageWriter<RemoteMessage>,
 ) {
+    for connection_event in connection_events.read() {
+        if connection_event.connected() {
+            gamepad_status.connected = true;
+        }
+        if connection_event.disconnected() {
+            gamepad_status.connected = false;
+            gamepad_status.had_input = false;
+        }
+    }
+
+    gamepad_status.had_input |= axis_events
+        .read()
+        .map(|event| event.axis == GamepadAxis::LeftZ)
+        .reduce(|a, b| a || b)
+        .unwrap_or(false);
+
     let Some((_, gamepad)) = gamepads.iter().next() else {
         error_once!("No gamepad connected.");
         return;
